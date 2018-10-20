@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Example confidence Distribution</title>
+    <style type="text/css">
+        canvas {
+            border: 5px solid black;
+            margin: auto;
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <canvas width="800" height="500" id="myCanvas"></canvas>
+    <script type="module">
+        import {Distribution} from "./src/distribution.js";
+        const dist = new Distribution({
+            canvas: document.getElementById('myCanvas'),
+            xMin: 200,
+            xMax: 300
+        });
+        window.dist = dist;
+    </script>
+</body>
+</html>
