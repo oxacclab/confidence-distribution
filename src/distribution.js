@@ -8,8 +8,10 @@ class Distribution {
         this.canvas = typeof args.canvas === "undefined"? null : args.canvas;
         this.xMax = typeof args.xMax === "undefined"? null : args.xMax;
         this.xMin = typeof args.xMin === "undefined"? null : args.xMin;
-        this.minPrecision = typeof args.minPrecision === "undefined"? .8 : args.minPrecision;
+        this.minPrecision = typeof args.minPrecision === "undefined"? .7 : args.minPrecision;
         this.maxPrecision = typeof args.maxPrecision === "undefined"? .995 : args.maxPrecision;
+
+        this.widgetSize = typeof args.widgetSize === "undefined"? 5 : args.widgetSize;
 
         // cartesian coordinates
         this.x = [];
@@ -103,7 +105,7 @@ class Distribution {
         let maxY = this.canvas.clientHeight;
         let offset = {
             x: utils.getMin(this.x),
-            y: 100//this.canvas.clientHeight/2 - this.yInt
+            y: 100
         };
         for(let i = 0; i < this.x.length; i++) {
             let out = this.pointToDrawPoint({x: this.x[i], y: this.y[i]}, offset, maxY);
@@ -167,6 +169,10 @@ class Distribution {
     getCursorCoordinates(clickEvent) {
         let x = clickEvent.clientX - this.canvas.getBoundingClientRect().left - this.canvas.clientLeft;
         let y = clickEvent.clientY - this.canvas.getBoundingClientRect().top - this.canvas.clientTop;
+
+        // save raw cursor position
+        this.cursorPosition = {x, y};
+
         // reverse y coordinate to handle graphics using reversed y axis
         y = this.canvas.clientHeight - y;
 
@@ -181,16 +187,20 @@ class Distribution {
         let cursor = this.getCursorCoordinates(clickEvent);
 
         // cap the cursor coordinates
-        cursor.x = cursor.x < 0? 0 : cursor.x > this.canvas.clientWidth? this.canvas.clientWidth : cursor.x;
+        cursor.x = cursor.x < 0? 0 : cursor.x >= this.canvas.clientWidth? this.canvas.clientWidth-1 : cursor.x;
         cursor.y = cursor.y < this.canvas.clientHeight/2?
             this.canvas.clientHeight/2 : cursor.y > this.canvas.clientHeight?
                 this.canvas.clientHeight : cursor.y;
-        console.log(cursor);
 
         // desired mean is the x equivalent value of the mouse x coordinate
-        let mu = this.x[Math.round(cursor.x / this.canvas.clientWidth * this.x.length)];
-        // desired precision is the positive y coordinate as a proportion of the maximum positive y value
-        let precision = (cursor.y - this.canvas.clientHeight/2) / this.canvas.clientHeight * 2;
+        let mu = this.x[Math.floor(cursor.x / this.canvas.clientWidth * this.x.length)];
+        // precision is the position in the y dimension between max and min precision limits
+        let limits = this.getDistributionLimitPoints(mu);
+        let precision = (cursor.y - limits.high) / (limits.high - limits.low);
+        console.log('----')
+        console.log(mu)
+        console.log(limits)
+        console.log(cursor.y)
         // input precision is bolstered by the minimum precision to prevent overly flat curves
         precision = this.minPrecision + (precision * (1-this.minPrecision));
         precision = precision > this.maxPrecision? this.maxPrecision : precision;
@@ -245,16 +255,6 @@ class Distribution {
             ctx.stroke();
         }
 
-        // line
-        /*ctx.beginPath();
-        ctx.moveTo(this.drawPoints.x[0]+Math.max(this.drawPoints.x), this.drawPoints.y[0]);
-        for(let i = 1; i < this.drawPoints.y.length; i++) {
-            ctx.lineTo(this.drawPoints.x[i]+this.pixelsPerPoint.x/2, this.drawPoints.y[i]);
-        }
-        ctx.lineWidth = 2;
-        ctx.strokeStyle = 'blue';
-        ctx.stroke();*/
-
         // x Axis
         ctx.beginPath();
         ctx.moveTo(0, this.canvas.clientHeight/2);
@@ -262,12 +262,70 @@ class Distribution {
         ctx.strokeStyle = 'black';
         ctx.stroke();
 
-        // TODO: add move widget
+        let i = this.x.indexOf(this.mu);
+        let muCentre = {
+            x: this.drawPoints.x[i] + this.pixelsPerPoint.x/2,
+            y: this.drawPoints.y[i]
+        };
+        console.log(muCentre)
+        this.drawWidget(muCentre);
+
         // TODO: add payout annotation
         // TODO: correct x offset (clikcing far right means x is undefined)
         // TODO: more intuitive vertical widget movement
 
         return this;
+    }
+
+    /**
+     * Return the theoretical limits of the confidence distribution
+     * @return {{low: number[], high: number[]}}
+     */
+    getDistributionLimits(mu = null) {
+        if(mu === null) // use midpoint as mean
+            mu = this.xMin + (this.xMax - this.xMin)/2;
+        return {
+            low: Distribution.f([mu], mu, this.minPrecision)[0],
+            high: Distribution.f([mu], mu, this.maxPrecision)[0]
+        }
+    }
+
+    getDistributionLimitPoints() {
+        let limits = this.getDistributionLimits(this.mu);
+        limits.low = this.pointToDrawPoint({x:0, y: limits.low * 100}, {x: 0, y: 100}, this.canvas.clientHeight/2).y;
+        limits.low = -limits.low - this.canvas.clientTop;
+        limits.high = this.pointToDrawPoint({x:0, y: limits.high * 100}, {x: 0, y: 100}, this.canvas.clientHeight/2).y;
+        limits.high = this.canvas.clientHeight/2 + limits.high;
+
+        return limits;
+    }
+
+    /**
+     * Draw the moving widget
+     * @param centre {{x: number, y: number}} coordinates for the widget's centre
+     */
+    drawWidget(centre) {
+        let ctx = this.canvas.getContext('2d');
+
+        let limits = this.getDistributionLimitPoints();
+        ctx.beginPath();
+        ctx.moveTo(0, limits.high);
+        ctx.lineTo(this.canvas.clientWidth, limits.high);
+        ctx.strokeStyle = 'red';
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(0, limits.low);
+        ctx.lineTo(this.canvas.clientWidth, limits.low);
+        ctx.strokeStyle = 'blue';
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.arc(centre.x, centre.y, this.widgetSize, 0, 2 * Math.PI);
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = 'black';
+        ctx.fillStyle = 'white';
+        ctx.fill();
+        ctx.stroke();
     }
 }
 
