@@ -1,5 +1,10 @@
 "use strict";
 
+// TODO: centre on canvas in x dimension
+// TODO: yInt adjustment?
+// TODO: adjust distribution at scale edges to keep AUC constant
+
+
 class Distribution {
     /**
      * @constructor
@@ -8,16 +13,26 @@ class Distribution {
         this.canvas = typeof args.canvas === "undefined"? null : args.canvas;
         this.xMax = typeof args.xMax === "undefined"? null : args.xMax;
         this.xMin = typeof args.xMin === "undefined"? null : args.xMin;
-        this.minPrecision = typeof args.minPrecision === "undefined"? .7 : args.minPrecision;
-        this.maxPrecision = typeof args.maxPrecision === "undefined"? .995 : args.maxPrecision;
+        this.minPrecision = typeof args.minPrecision === "undefined"? .10 : args.minPrecision;
+        this.maxPrecision = typeof args.maxPrecision === "undefined"? .9 : args.maxPrecision;
+        this.minBet = typeof args.minBet === "undefined"? .50 : args.minBet;
+        this.maxBet = typeof args.maxBet === "undefined"? .99 : args.maxBet;
 
         this.widgetSize = typeof args.widgetSize === "undefined"? 5 : args.widgetSize;
 
         // cartesian coordinates
         this.x = [];
-        for(let i = 0; i < this.xMax - this.xMin; i++)
+        for(let i = 0; i <= this.xMax - this.xMin; i++)
             this.x[i] = i - (this.xMax - this.xMin)/2;
         this.y = [];
+
+        // betting coordinates
+        this.bet = {
+            yRaw: 0, // y coordinate as a proportion of available y-space
+            proportion: 0, // bet as a proportion of available precision space
+            amount: this.minBet,
+            on: this.xMin + (this.xMax - this.xMin)
+        };
 
         // graphics coordinates
         this.drawPoints = {x: [], y: [], yInt: 0};
@@ -43,6 +58,14 @@ class Distribution {
     }
 
     /**
+     * Avoids numerous recalculations of a square root
+     * @return {number} - Math.sqrt(2 * Math.PI)
+     */
+    static get root2pi() {
+        return 2.5066282746310002;
+    }
+
+    /**
      * Return f(x) which is the frequency of x in the normal distribution
      * @param x {number[]} base score
      * @param mu {number} mean of the normal distribution
@@ -51,7 +74,7 @@ class Distribution {
      */
     static f(x, mu, sd) {
         let y = [];
-        const z = 1/(Math.sqrt(2*Math.PI)*sd);
+        const z = 1 / (Distribution.root2pi * sd);
         const w = Math.pow(2*sd, 2);
         for(let i = 0; i < x.length; i++) {
             // normal distribution
@@ -66,6 +89,7 @@ class Distribution {
      * @return {number}
      */
     static findIntercept(y) {
+        // This can probably just be -(mean of the y values)!
         let error = Infinity;
         let newError = Infinity;
         let z = 0;
@@ -81,6 +105,29 @@ class Distribution {
             }
         }
         return z;
+    }
+
+    /**
+     * Find the maximum number of pixels assignable to each point, and the number of pixels left over
+     * @param points {int} number of points required
+     * @param pixels {int} number of pixels available
+     * @return {{ratio: number, remainder: number}}
+     */
+    static getPixelRatio(points, pixels) {
+        let ratio = Math.floor(pixels / points);
+        let remainder = pixels - (ratio * points);
+        return {ratio, remainder};
+    }
+
+    /**
+     * Number of pixels for each cartesian point
+     * @return {{x: number, y: number}}
+     */
+    get pixelsPerPoint() {
+        return {
+            x: Distribution.getPixelRatio(this.x.length, this.canvas.clientWidth).ratio,
+            y: Distribution.getPixelRatio(1, this.canvas.clientHeight).ratio // fixed y axis 0:1
+        };
     }
 
     /**
@@ -105,63 +152,13 @@ class Distribution {
         let maxY = this.canvas.clientHeight;
         let offset = {
             x: utils.getMin(this.x),
-            y: 100
+            y: 0
         };
         for(let i = 0; i < this.x.length; i++) {
-            let out = this.pointToDrawPoint({x: this.x[i], y: this.y[i]}, offset, maxY);
-            this.drawPoints.x[i] = out.x;
+            let out = this.pointToDrawPoint({x: this.x[i], y: Math.round(this.y[i]*100)/100}, offset, maxY);
+            this.drawPoints.x[i] = out.x + this.pixelsPerPoint.x/2;
             this.drawPoints.y[i] = out.y;
         }
-
-        return this;
-    }
-
-    /**
-     * Find the maximum number of pixels assignable to each point, and the number of pixels left over
-     * @param points {int} number of points required
-     * @param pixels {int} number of pixels available
-     * @return {{ratio: number, remainder: number}}
-     */
-    static getPixelRatio(points, pixels) {
-        let ratio = Math.floor(pixels / points);
-        let remainder = pixels - (ratio * points);
-        return {ratio, remainder};
-    }
-
-    /**
-     * Number of pixels for each cartesian point
-     * @return {{x: number, y: number}}
-     */
-    get pixelsPerPoint() {
-        return {
-            x: Distribution.getPixelRatio(this.x.length, this.canvas.clientWidth).ratio,
-            y: Distribution.getPixelRatio(200, this.canvas.clientHeight).ratio // fixed y axis -1:1 by 0.01
-        };
-    }
-
-    /**
-     * Generate new y values for a given mean and precision
-     *
-     * @return Distribution - return self for chaining
-     */
-    updateY() {
-        // Calculate the y values
-        let sd = (1 - this.precision) * (utils.getMax(this.x) - utils.getMin(this.x)); // scale sd to x axis
-        this.y = Distribution.f(this.x, this.mu, sd);
-        // scale y values to between 1 and -1
-        let max = utils.getMax(this.y);
-        for(let i = 0; i < this.y.length; i++)
-            this.y[i] = this.precision * this.y[i] * 100 / max;
-
-        this.yInt = Distribution.findIntercept(this.y);
-
-        this.drawPoints.yInt = this.pointToDrawPoint(
-            {x: 0, y: this.yInt},
-            {x: 0, y: 100},
-            this.canvas.clientHeight)
-            .y;
-
-        //this.yInt = this.canvas.clientHeight/2;
 
         return this;
     }
@@ -188,33 +185,68 @@ class Distribution {
 
         // cap the cursor coordinates
         cursor.x = cursor.x < 0? 0 : cursor.x >= this.canvas.clientWidth? this.canvas.clientWidth-1 : cursor.x;
-        cursor.y = cursor.y < this.canvas.clientHeight/2?
-            this.canvas.clientHeight/2 : cursor.y > this.canvas.clientHeight?
-                this.canvas.clientHeight : cursor.y;
+        cursor.y = cursor.y <= 0? 1 : cursor.y > this.canvas.clientHeight? this.canvas.clientHeight : cursor.y;
 
+        // y as proportion of space available
+        this.bet.yRaw = (cursor.y) / (this.canvas.clientHeight);
+
+        // Clamp by allowed precision range
+        this.bet.yRaw = this.bet.yRaw < this.minPrecision?
+            this.minPrecision : this.bet.yRaw > this.maxPrecision?
+                this.maxPrecision : this.bet.yRaw;
+        
+        this.bet.proportion = (this.bet.yRaw - this.minPrecision) / (this.maxPrecision - this.minPrecision);
+
+        // desired bet amount is proportion of the betting space available
+        this.bet.amount = this.minBet + this.bet.proportion * (this.maxBet - this.minBet);
         // desired mean is the x equivalent value of the mouse x coordinate
-        let mu = this.x[Math.floor(cursor.x / this.canvas.clientWidth * this.x.length)];
-        // precision is the position in the y dimension between max and min precision limits
-        let limits = this.getDistributionLimitPoints(mu);
-        let precision = (cursor.y - limits.high) / (limits.high - limits.low);
-        console.log('----')
-        console.log(mu)
-        console.log(limits)
-        console.log(cursor.y)
-        // input precision is bolstered by the minimum precision to prevent overly flat curves
-        precision = this.minPrecision + (precision * (1-this.minPrecision));
-        precision = precision > this.maxPrecision? this.maxPrecision : precision;
+        this.bet.on = this.x[Math.floor(cursor.x / this.canvas.clientWidth * this.x.length)];
 
-        this.mu = mu;
-        this.precision = precision;
+        return this;
+    }
+
+    /**
+     * Generate new y values for a given mean and precision
+     *
+     * @return Distribution - return self for chaining
+     */
+    updateY() {
+        // Y-values need to be scaled to the x-axis range
+        let range = (this.xMax - this.xMin);
+        let muY = this.bet.yRaw / range * 100;
+
+        // sd has to be such that the highest y value should be muY
+        // This can be obtained by rearranging the normal distribution formula for x = mode(x)
+        let sd = 1 / (Distribution.root2pi * muY);
+
+        // Calculate the y values
+        this.yRaw = Distribution.f(this.x, this.bet.on, sd);
+
+        // Scale resulting y values to match x axis range
+        // let range = this.xMax - this.xMin;
+        for(let i = 0; i < this.yRaw.length; i++)
+            this.y[i] = this.yRaw[i] * range / 100
+        // this.y = this.yRaw
+
+        this.yInt = Distribution.findIntercept(this.y);
+
+        this.drawPoints.yInt = this.pointToDrawPoint(
+            {x: 0, y: this.yInt},
+            {x: 0, y: 0},
+            this.canvas.clientHeight)
+            .y;
+
+        //this.yInt = this.canvas.clientHeight/2;
 
         return this;
     }
 
     drawToCanvas(clickEvent) {
+        // console.log('-----------------')
+
         if(clickEvent === null)
             return console.log('No click event sent to drawToCanvas');
-        if(this.canvas === null) // TODO: better check for canvas usability
+        if(this.canvas === null) // TODO: better check for canvas usability. Move to constructor?
             return console.log('No canvas defined for drawToCanvas');
 
         this.updateFromCursor(clickEvent)
@@ -226,29 +258,31 @@ class Distribution {
         // clear canvas
         ctx.clearRect(0,0,this.canvas.clientWidth, this.canvas.clientHeight);
 
-        // shift the y values so the intercept is in the middle of the canvas
-        this.drawPoints.y = utils.add(this.drawPoints.y, this.canvas.clientHeight/2 - this.drawPoints.yInt);
-
         // rectangles
-        ctx.fillStyle = 'lightblue';
-        ctx.fill();
-        ctx.strokeStyle = 'white';
-        ctx.lineWidth = 2;
+        ctx.lineWidth = this.pixelsPerPoint.x / 4;
+        let strokeStyle = {
+            low: ctx.lineWidth <= 1? 'red' : 'white',
+            high: ctx.lineWidth <= 1? 'lightblue' : 'white'
+        };
+
         this.drawPoints.x = utils.add(this.drawPoints.x, -this.pixelsPerPoint.x/2); // centering
         for(let i = 1; i < this.drawPoints.y.length; i++) {
             ctx.beginPath();
-            if(this.drawPoints.y[i] >= this.canvas.clientHeight/2) {
+            if(this.drawPoints.y[i] >= this.canvas.clientHeight) {
                 ctx.rect(this.drawPoints.x[i],
                     this.canvas.clientHeight/2,
                     this.pixelsPerPoint.x,
-                    this.drawPoints.y[i] - this.canvas.clientHeight/2);
+                    this.drawPoints.y[i] - this.canvas.clientHeight);
+                ctx.strokeStyle = strokeStyle.low;
                 ctx.fillStyle = 'red';
+
             }
             else {
                 ctx.rect(this.drawPoints.x[i],
                     this.drawPoints.y[i],
                     this.pixelsPerPoint.x,
-                    this.canvas.clientHeight/2 - this.drawPoints.y[i]);
+                    this.canvas.clientHeight - this.drawPoints.y[i]);
+                ctx.strokeStyle = strokeStyle.high;
                 ctx.fillStyle = 'lightblue';
             }
             ctx.fill();
@@ -256,48 +290,22 @@ class Distribution {
         }
 
         // x Axis
+        ctx.strokeStyle = 'black';
+        ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.moveTo(0, this.canvas.clientHeight/2);
-        ctx.lineTo(this.canvas.clientWidth, this.canvas.clientHeight/2);
+        ctx.moveTo(0, this.canvas.clientHeight);
+        ctx.lineTo(this.canvas.clientWidth, this.canvas.clientHeight);
         ctx.strokeStyle = 'black';
         ctx.stroke();
 
-        let i = this.x.indexOf(this.mu);
+        let i = this.x.indexOf(this.bet.on);
         let muCentre = {
             x: this.drawPoints.x[i] + this.pixelsPerPoint.x/2,
             y: this.drawPoints.y[i]
         };
-        console.log(muCentre)
         this.drawWidget(muCentre);
 
-        // TODO: add payout annotation
-        // TODO: correct x offset (clikcing far right means x is undefined)
-        // TODO: more intuitive vertical widget movement
-
         return this;
-    }
-
-    /**
-     * Return the theoretical limits of the confidence distribution
-     * @return {{low: number[], high: number[]}}
-     */
-    getDistributionLimits(mu = null) {
-        if(mu === null) // use midpoint as mean
-            mu = this.xMin + (this.xMax - this.xMin)/2;
-        return {
-            low: Distribution.f([mu], mu, this.minPrecision)[0],
-            high: Distribution.f([mu], mu, this.maxPrecision)[0]
-        }
-    }
-
-    getDistributionLimitPoints() {
-        let limits = this.getDistributionLimits(this.mu);
-        limits.low = this.pointToDrawPoint({x:0, y: limits.low * 100}, {x: 0, y: 100}, this.canvas.clientHeight/2).y;
-        limits.low = -limits.low - this.canvas.clientTop;
-        limits.high = this.pointToDrawPoint({x:0, y: limits.high * 100}, {x: 0, y: 100}, this.canvas.clientHeight/2).y;
-        limits.high = this.canvas.clientHeight/2 + limits.high;
-
-        return limits;
     }
 
     /**
@@ -307,25 +315,44 @@ class Distribution {
     drawWidget(centre) {
         let ctx = this.canvas.getContext('2d');
 
-        let limits = this.getDistributionLimitPoints();
         ctx.beginPath();
-        ctx.moveTo(0, limits.high);
-        ctx.lineTo(this.canvas.clientWidth, limits.high);
-        ctx.strokeStyle = 'red';
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(0, limits.low);
-        ctx.lineTo(this.canvas.clientWidth, limits.low);
-        ctx.strokeStyle = 'blue';
-        ctx.stroke();
-
-        ctx.beginPath();
+        ctx.fillStyle = 'white';
+        ctx.strokeStyle = 'black';
         ctx.arc(centre.x, centre.y, this.widgetSize, 0, 2 * Math.PI);
         ctx.lineWidth = 2;
-        ctx.strokeStyle = 'black';
-        ctx.fillStyle = 'white';
         ctx.fill();
         ctx.stroke();
+
+        this.labelWidget(centre);
+
+        return this;
+    }
+
+    labelWidget(widgetPosition) {
+        let bet = this.bet.amount;
+
+        let label = {
+            text: "$" + (Math.round(bet*100)/100).toString() + " on " + (this.bet.on + this.xMin).toString(),
+            font: '14px Arial',
+            left: widgetPosition.x + this.widgetSize*2,
+            width: 100,
+            top: widgetPosition.y + this.widgetSize,
+            height: 10
+        };
+
+        if(label.left + label.width > this.canvas.clientWidth)
+            label.left -= label.width;
+
+        if(label.top < label.height * 2)
+            label.top = label.height * 2;
+        if(label.top > this.canvas.clientHeight - label.height)
+            label.top = this.canvas.clientHeight - label.height;
+
+        let ctx = this.canvas.getContext('2d');
+        ctx.font = label.font;
+        ctx.strokeText(label.text, label.left, label.top);
+
+        return this;
     }
 }
 

@@ -12,13 +12,13 @@
     </style>
 </head>
 <body>
-    <canvas width="800" height="500" id="myCanvas"></canvas>
+    <canvas width="808" height="500" id="myCanvas"></canvas>
     <script type="module">
         import {Distribution} from "./src/distribution.js";
         const dist = new Distribution({
             canvas: document.getElementById('myCanvas'),
-            xMin: 200,
-            xMax: 300
+            xMin: 100,
+            xMax: 200
         });
         window.dist = dist;
     </script>
