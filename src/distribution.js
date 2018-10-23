@@ -2,28 +2,74 @@
 
 // TODO: centre on canvas in x dimension
 // TODO: yInt adjustment?
-// TODO: adjust distribution at scale edges to keep AUC constant
+// TODO: y cap needs to accommodate AUC adjustment
+// TODO: accommodate AUC adjustment into y mouse detection
+// TODO: display payout
+// TODO: highlight hovered option
+// TODO: widget label style options
+// TODO: callback for drawing x axis options or customisable function
+// TODO: allow reversed x axis values (e.g. 60 to -60)
 
 
 class Distribution {
     /**
      * @constructor
+     *
+     * Distribution allows the generation of probability distributions (using the normal distribution)
+     * on the basis of a specified (x,y) coordinate giving the probability density at the mean
+     * (the distribution is symmetrical).
+     *
+     * The distributions allow for a form of spread betting on a range of possible answers. The range of
+     * widths (standard deviations) allowed can be specified using min/maxPrecision, and the distribution
+     * is scaled to respect that value to avoid unnecessary whitespace.
+     *
+     * Betting values can be included. Betting values start with the minimum bet for the minimum precision
+     * and increase linearly until the maximum bet is reached at the maximum precision.
+     *
+     * Probability distributions are draw to the supplied canvas object.
+     *
+     * Various styling options are available through the style object.
+     *
+     * @param args {{}}
+     * @param args.canvas {HTMLElement} - canvas on which to draw the distribution
+     * @param [args.xMin = 0] {number} - x axis minimum
+     * @param [args.xMax = 100] {number} - x axis maximum
+     * @param [args.reverseX = false] {boolean} - whether to reverse x axis labels
+     * @param [args.minPrecision = .0] {number} - minimum distribution precision (between 0 and 1)
+     * @param [args.maxPrecision = 1.0] {number} - maximum distribution precision (between 0 and 1)
+     * @param [args.minBet = .0] {number} - minimum bet amount allowed. Assigned to minPrecision.
+     * @param [args.maxBet = 1.0] {number} - maximum bet allowed. Assigned to maxPrecision.
+     *
+     * @param [args.constantAUC = true] {boolean} - whether to increase inbounds values where parts of
+     * the distribution are outside of the limits of the x axis.
+     *
+     * @param [args.style = {}] {{}} - styling options. Default to Distribution.defaultStyle.
+     *
+     * @return {Distribution}
      */
     constructor(args) {
         this.canvas = typeof args.canvas === "undefined"? null : args.canvas;
-        this.xMax = typeof args.xMax === "undefined"? null : args.xMax;
-        this.xMin = typeof args.xMin === "undefined"? null : args.xMin;
+        this.xMin = typeof args.xMin === "undefined"? 0 : args.xMin;
+        this.xMax = typeof args.xMax === "undefined"? 100 : args.xMax;
+        this.reverseX = typeof args.reverseX === "undefined"? false : args.reverseX;
         this.minPrecision = typeof args.minPrecision === "undefined"? .10 : args.minPrecision;
         this.maxPrecision = typeof args.maxPrecision === "undefined"? .9 : args.maxPrecision;
         this.minBet = typeof args.minBet === "undefined"? .50 : args.minBet;
         this.maxBet = typeof args.maxBet === "undefined"? .99 : args.maxBet;
 
-        this.widgetSize = typeof args.widgetSize === "undefined"? 5 : args.widgetSize;
+        this.constantAUC = typeof args.constantAUC === "undefined"? true : args.constantAUC;
+
+        this.style = Distribution.defaultStyle;
+        if(typeof args.style !== "undefined")
+            Object.keys(args.style).forEach((k)=>this.style[k] = args.style[k]);
 
         // cartesian coordinates
         this.x = [];
         for(let i = 0; i <= this.xMax - this.xMin; i++)
             this.x[i] = i - (this.xMax - this.xMin)/2;
+        if(this.reverseX) {
+            this.x = this.x.reverse();
+        }
         this.y = [];
 
         // betting coordinates
@@ -55,6 +101,19 @@ class Distribution {
         this.canvas.addEventListener('mouseout', ()=>this.canvas.trackMouse(false));
 
         return this;
+    }
+
+    /**
+     * Default style options.
+     */
+    static get defaultStyle() {
+        return {
+            padding: {
+                x: 0,
+                y: 0
+            },
+            widgetSize: 5,
+        };
     }
 
     /**
@@ -120,13 +179,26 @@ class Distribution {
     }
 
     /**
+     * @return {number} the standardized height of the graph used for interpreting y values and cursor position
+     */
+    get proportionalSpaceY() {
+        let AUC = 0;
+        if(this.constantAUC) {
+            // Needs an adjustment term to account for constant AUC
+            // ...
+        }
+        return(this.maxPrecision + this.style.padding.y + AUC);
+    }
+
+    /**
      * Number of pixels for each cartesian point
      * @return {{x: number, y: number}}
      */
     get pixelsPerPoint() {
         return {
             x: Distribution.getPixelRatio(this.x.length, this.canvas.clientWidth).ratio,
-            y: Distribution.getPixelRatio(1, this.canvas.clientHeight).ratio // fixed y axis 0:1
+            y: Distribution.getPixelRatio(this.proportionalSpaceY,
+                this.canvas.clientHeight).ratio // y axis 0:maxPrecision
         };
     }
 
@@ -151,11 +223,11 @@ class Distribution {
     recalculateDrawPoints() {
         let maxY = this.canvas.clientHeight;
         let offset = {
-            x: utils.getMin(this.x),
+            x: 0,
             y: 0
         };
         for(let i = 0; i < this.x.length; i++) {
-            let out = this.pointToDrawPoint({x: this.x[i], y: Math.round(this.y[i]*100)/100}, offset, maxY);
+            let out = this.pointToDrawPoint({x: i, y: Math.round(this.y[i]*100)/100}, offset, maxY);
             this.drawPoints.x[i] = out.x + this.pixelsPerPoint.x/2;
             this.drawPoints.y[i] = out.y;
         }
@@ -188,7 +260,7 @@ class Distribution {
         cursor.y = cursor.y <= 0? 1 : cursor.y > this.canvas.clientHeight? this.canvas.clientHeight : cursor.y;
 
         // y as proportion of space available
-        this.bet.yRaw = (cursor.y) / (this.canvas.clientHeight);
+        this.bet.yRaw = (cursor.y * (this.proportionalSpaceY)) / (this.canvas.clientHeight);
 
         // Clamp by allowed precision range
         this.bet.yRaw = this.bet.yRaw < this.minPrecision?
@@ -200,7 +272,8 @@ class Distribution {
         // desired bet amount is proportion of the betting space available
         this.bet.amount = this.minBet + this.bet.proportion * (this.maxBet - this.minBet);
         // desired mean is the x equivalent value of the mouse x coordinate
-        this.bet.on = this.x[Math.floor(cursor.x / this.canvas.clientWidth * this.x.length)];
+        this.bet.index = Math.floor(cursor.x / this.canvas.clientWidth * this.x.length);
+        this.bet.on = this.x[this.bet.index];
 
         return this;
     }
@@ -221,6 +294,26 @@ class Distribution {
 
         // Calculate the y values
         this.yRaw = Distribution.f(this.x, this.bet.on, sd);
+
+        // Adjust y values for cases where the distribution has portions which are out-of-range
+        if(this.constantAUC) {
+            // Remainder is the absolute difference of tail areas
+            let remainder = 0;
+            for(let i = 0; i < this.x.length; i++) {
+                if(this.x[i] < this.bet.on)
+                    remainder += this.yRaw[i];
+                if(this.x[i] > this.bet.on)
+                    remainder -= this.yRaw[i];
+            }
+            remainder = Math.abs(remainder);
+            if(remainder/this.x.length !== 0) {
+                // increase each y value proportionately to its current value
+                let sum = utils.sum(this.yRaw);
+                for(let i = 0; i < this.yRaw.length; i++) {
+                    this.yRaw[i] += remainder * (this.yRaw[i] / sum);
+                }
+            }
+        }
 
         // Scale resulting y values to match x axis range
         // let range = this.xMax - this.xMin;
@@ -318,7 +411,7 @@ class Distribution {
         ctx.beginPath();
         ctx.fillStyle = 'white';
         ctx.strokeStyle = 'black';
-        ctx.arc(centre.x, centre.y, this.widgetSize, 0, 2 * Math.PI);
+        ctx.arc(centre.x, centre.y, this.style.widgetSize, 0, 2 * Math.PI);
         ctx.lineWidth = 2;
         ctx.fill();
         ctx.stroke();
@@ -332,11 +425,11 @@ class Distribution {
         let bet = this.bet.amount;
 
         let label = {
-            text: "$" + (Math.round(bet*100)/100).toString() + " on " + (this.bet.on + this.xMin).toString(),
+            text: "$" + (Math.round(bet*100)/100).toString() + " on " + (this.bet.on).toString(),
             font: '14px Arial',
-            left: widgetPosition.x + this.widgetSize*2,
+            left: widgetPosition.x + this.style.widgetSize*2,
             width: 100,
-            top: widgetPosition.y + this.widgetSize,
+            top: widgetPosition.y + this.style.widgetSize,
             height: 10
         };
 
