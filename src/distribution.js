@@ -4,11 +4,10 @@
 // TODO: yInt adjustment?
 // TODO: y cap needs to accommodate AUC adjustment
 // TODO: accommodate AUC adjustment into y mouse detection
-// TODO: display payout
+// TODO: calculate and handle payouts
 // TODO: highlight hovered option
 // TODO: widget label style options
 // TODO: callback for drawing x axis options or customisable function
-// TODO: allow reversed x axis values (e.g. 60 to -60)
 
 
 class Distribution {
@@ -34,6 +33,7 @@ class Distribution {
      * @param args.canvas {HTMLElement} - canvas on which to draw the distribution
      * @param [args.xMin = 0] {number} - x axis minimum
      * @param [args.xMax = 100] {number} - x axis maximum
+     * @param [args.xPoints = (xMax-xMin)] - number of points on the x axis
      * @param [args.reverseX = false] {boolean} - whether to reverse x axis labels
      * @param [args.minPrecision = .0] {number} - minimum distribution precision (between 0 and 1)
      * @param [args.maxPrecision = 1.0] {number} - maximum distribution precision (between 0 and 1)
@@ -45,17 +45,22 @@ class Distribution {
      *
      * @param [args.style = {}] {{}} - styling options. Default to Distribution.defaultStyle.
      *
+     * @param [args.callback = {}] {{}} - callbacks
+     * @param [args.callback.onUpdate = null] {function} - called when Distribution updates from cursor click.
+     * Called with the click event as a parameter.
+     *
      * @return {Distribution}
      */
     constructor(args) {
         this.canvas = typeof args.canvas === "undefined"? null : args.canvas;
         this.xMin = typeof args.xMin === "undefined"? 0 : args.xMin;
         this.xMax = typeof args.xMax === "undefined"? 100 : args.xMax;
+        this.xPoints = typeof args.xPoints === "undefined"? this.xMax - this.xMin : args.xPoints;
         this.reverseX = typeof args.reverseX === "undefined"? false : args.reverseX;
         this.minPrecision = typeof args.minPrecision === "undefined"? .10 : args.minPrecision;
         this.maxPrecision = typeof args.maxPrecision === "undefined"? .9 : args.maxPrecision;
-        this.minBet = typeof args.minBet === "undefined"? .50 : args.minBet;
-        this.maxBet = typeof args.maxBet === "undefined"? .99 : args.maxBet;
+        this.minBet = typeof args.minBet === "undefined"? .10 : args.minBet;
+        this.maxBet = typeof args.maxBet === "undefined"? .90 : args.maxBet;
 
         this.constantAUC = typeof args.constantAUC === "undefined"? true : args.constantAUC;
 
@@ -63,10 +68,15 @@ class Distribution {
         if(typeof args.style !== "undefined")
             Object.keys(args.style).forEach((k)=>this.style[k] = args.style[k]);
 
+        this.callback = Distribution.defaultCallbacks;
+        if(typeof args.callback !== "undefined")
+            Object.keys(args.callback).forEach((k)=>this.callback[k] = args.callback[k]);
+
         // cartesian coordinates
         this.x = [];
+        let step = (this.xMax - this.xMin) / this.xPoints;
         for(let i = 0; i <= this.xMax - this.xMin; i++)
-            this.x[i] = i - (this.xMax - this.xMin)/2;
+            this.x[i] = this.xMin + step * i;
         if(this.reverseX) {
             this.x = this.x.reverse();
         }
@@ -77,7 +87,8 @@ class Distribution {
             yRaw: 0, // y coordinate as a proportion of available y-space
             proportion: 0, // bet as a proportion of available precision space
             amount: this.minBet,
-            on: this.xMin + (this.xMax - this.xMin)
+            on: this.xMin + (this.xMax - this.xMin),
+            won: 0.0
         };
 
         // graphics coordinates
@@ -87,18 +98,32 @@ class Distribution {
         this.canvas.drawToCanvas = function(event) {
             this.distribution.drawToCanvas(event);
         };
-        this.canvas.trackMouse = function(enable = true) {
+        this.canvas.clickMouse = function(clickEvent) {
+            this.registerTrackMouse();
+            this.drawToCanvas(clickEvent)
+        };
+        this.canvas.registerTrackMouse = function(enable = true) {
             if(enable)
                 this.addEventListener('mousemove', this.drawToCanvas);
             else
                 this.removeEventListener('mousemove', this.drawToCanvas);
         };
-        this.canvas.addEventListener('mousedown', (event)=>{
-            this.canvas.trackMouse();
-            this.drawToCanvas(event)
-        });
-        this.canvas.addEventListener('mouseup', ()=>this.canvas.trackMouse(false));
-        this.canvas.addEventListener('mouseout', ()=>this.canvas.trackMouse(false));
+        this.canvas.registerClickMouse = function(enable = true) {
+            if(enable)
+                this.addEventListener('mousedown', this.clickMouse);
+            else
+                this.removeEventListener('mousedown', this.clickMouse);
+        };
+
+        this.canvas.addEventListener('mouseup', ()=>this.canvas.registerTrackMouse(false));
+        this.canvas.addEventListener('mouseout', ()=>this.canvas.registerTrackMouse(false));
+        this.canvas.registerClickMouse(true);
+
+        // timing of key events
+        this.time = {
+            bet: -1,
+            start: new Date().getTime(),
+        };
 
         return this;
     }
@@ -108,11 +133,19 @@ class Distribution {
      */
     static get defaultStyle() {
         return {
-            padding: {
-                x: 0,
-                y: 0
-            },
+            paddingX: 0,
+            paddingY: 0,
             widgetSize: 5,
+            showWidgetLabel: true
+        };
+    }
+
+    /**
+     * Default callbacks.
+     */
+    static get defaultCallbacks() {
+        return {
+            onUpdate: null
         };
     }
 
@@ -187,7 +220,7 @@ class Distribution {
             // Needs an adjustment term to account for constant AUC
             // ...
         }
-        return(this.maxPrecision + this.style.padding.y + AUC);
+        return(this.maxPrecision + this.style.paddingY + AUC);
     }
 
     /**
@@ -274,6 +307,10 @@ class Distribution {
         // desired mean is the x equivalent value of the mouse x coordinate
         this.bet.index = Math.floor(cursor.x / this.canvas.clientWidth * this.x.length);
         this.bet.on = this.x[this.bet.index];
+        this.bet.time = new Date().getTime();
+
+        if(typeof this.callback.onUpdate === "function")
+            this.callback.onUpdate(clickEvent);
 
         return this;
     }
@@ -334,24 +371,18 @@ class Distribution {
         return this;
     }
 
-    drawToCanvas(clickEvent) {
-        // console.log('-----------------')
-
-        if(clickEvent === null)
-            return console.log('No click event sent to drawToCanvas');
-        if(this.canvas === null) // TODO: better check for canvas usability. Move to constructor?
-            return console.log('No canvas defined for drawToCanvas');
-
-        this.updateFromCursor(clickEvent)
-            .updateY()
-            .recalculateDrawPoints();
-
+    /**
+     * Clear the canvas
+     * @return {Distribution} self for chaining
+     */
+    clearCanvas() {
         let ctx = this.canvas.getContext('2d');
-
-        // clear canvas
         ctx.clearRect(0,0,this.canvas.clientWidth, this.canvas.clientHeight);
+        return this;
+    }
 
-        // rectangles
+    drawRectangles() {
+        let ctx = this.canvas.getContext('2d');
         ctx.lineWidth = this.pixelsPerPoint.x / 4;
         let strokeStyle = {
             low: ctx.lineWidth <= 1? 'red' : 'white',
@@ -362,13 +393,12 @@ class Distribution {
         for(let i = 1; i < this.drawPoints.y.length; i++) {
             ctx.beginPath();
             if(this.drawPoints.y[i] >= this.canvas.clientHeight) {
-                ctx.rect(this.drawPoints.x[i],
-                    this.canvas.clientHeight/2,
-                    this.pixelsPerPoint.x,
-                    this.drawPoints.y[i] - this.canvas.clientHeight);
-                ctx.strokeStyle = strokeStyle.low;
-                ctx.fillStyle = 'red';
-
+                // ctx.rect(this.drawPoints.x[i],
+                //     this.canvas.clientHeight/2,
+                //     this.pixelsPerPoint.x,
+                //     this.drawPoints.y[i] - this.canvas.clientHeight);
+                // ctx.strokeStyle = strokeStyle.low;
+                // ctx.fillStyle = 'red';
             }
             else {
                 ctx.rect(this.drawPoints.x[i],
@@ -381,8 +411,44 @@ class Distribution {
             ctx.fill();
             ctx.stroke();
         }
+        return this;
+    }
 
-        // x Axis
+    drawRectangle(xIndex, fill = 'blue', line = 'lightgreen') {
+        let ctx = this.canvas.getContext('2d');
+        ctx.beginPath();
+        ctx.lineStyle = line;
+        ctx.fillStyle = fill;
+        ctx.lineWidth = this.pixelsPerPoint.x / 4;
+        ctx.rect(
+            this.drawPoints.x[xIndex],
+            this.drawPoints.y[xIndex],
+            this.pixelsPerPoint.x,
+            this.canvas.clientHeight - this.drawPoints.y[xIndex]);
+        ctx.fill();
+        ctx.stroke();
+        return this;
+    }
+
+    highlightColumn(xIndex) {
+        let ctx = this.canvas.getContext('2d');
+        ctx.beginPath();
+        ctx.lineWidth = this.pixelsPerPoint.x / 4;
+        ctx.lineStyle = 'lightgreen';
+        ctx.fillStyle = 'lightgreen';
+        ctx.rect(
+            this.drawPoints.x[xIndex],
+            0,
+            this.pixelsPerPoint.x,
+            this.canvas.clientHeight
+        );
+        ctx.fill();
+        ctx.stroke();
+        return this;
+    }
+
+    drawAxisX() {
+        let ctx = this.canvas.getContext('2d');
         ctx.strokeStyle = 'black';
         ctx.lineWidth = 2;
         ctx.beginPath();
@@ -390,13 +456,46 @@ class Distribution {
         ctx.lineTo(this.canvas.clientWidth, this.canvas.clientHeight);
         ctx.strokeStyle = 'black';
         ctx.stroke();
+        return this;
+    }
 
-        let i = this.x.indexOf(this.bet.on);
-        let muCentre = {
-            x: this.drawPoints.x[i] + this.pixelsPerPoint.x/2,
-            y: this.drawPoints.y[i]
-        };
-        this.drawWidget(muCentre);
+    drawAxisY() {
+        let tickWidth = 5;
+
+        // line
+        let ctx = this.canvas.getContext('2d');
+        ctx.strokeStyle = 'black';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(this.canvas.clientWidth/2, 0);
+        ctx.lineTo(this.canvas.clientWidth/2, this.canvas.clientHeight);
+        ctx.strokeStyle = 'black';
+        ctx.stroke();
+
+        // tics
+        let payoutStep = (this.maxBet - this.minBet) / (this.maxPrecision - this.minPrecision);
+        let minPayout = this.minBet - payoutStep * this.minPrecision;
+        let payouts = [];
+        for(let i = 0; i < this.maxPrecision * 100; i++) {
+            payouts[i] = minPayout + payoutStep * (i+1) / 100;
+        }
+        payouts = payouts.reverse();
+        // this.payouts = payouts;
+
+        let ticks = 18;
+
+        for(let i = 0; i < ticks; i++) {
+            ctx.beginPath();
+            ctx.moveTo(this.canvas.clientWidth/2, i*(this.maxPrecision/ticks)*this.pixelsPerPoint.y);
+            ctx.lineTo(this.canvas.clientWidth/2 + tickWidth, i*(this.maxPrecision/ticks)*this.pixelsPerPoint.y);
+            ctx.strokeText(
+                payouts[Math.round(payouts.length/ticks*i)].toFixed(2),
+                this.canvas.clientWidth/2 + tickWidth * 2,
+                i*(this.maxPrecision/ticks)*this.pixelsPerPoint.y
+            );
+            ctx.stroke();
+
+        }
 
         return this;
     }
@@ -416,16 +515,18 @@ class Distribution {
         ctx.fill();
         ctx.stroke();
 
-        this.labelWidget(centre);
+        if(this.style.showWidgetLabel)
+            this.labelWidget(centre);
 
         return this;
     }
 
     labelWidget(widgetPosition) {
         let bet = this.bet.amount;
+        let betString = (Math.round(bet*100)/100).toFixed(2);
 
         let label = {
-            text: "$" + (Math.round(bet*100)/100).toString() + " on " + (this.bet.on).toString(),
+            text: "$" + betString + " on " + (this.bet.on).toString(),
             font: '14px Arial',
             left: widgetPosition.x + this.style.widgetSize*2,
             width: 100,
@@ -445,6 +546,47 @@ class Distribution {
         ctx.font = label.font;
         ctx.strokeText(label.text, label.left, label.top);
 
+        return this;
+    }
+
+    drawToCanvas(clickEvent) {
+        // console.log('-----------------')
+
+        if(clickEvent === null)
+            return console.log('No click event sent to drawToCanvas');
+        if(this.canvas === null) // TODO: better check for canvas usability. Move to constructor?
+            return console.log('No canvas defined for drawToCanvas');
+
+        this.updateFromCursor(clickEvent)
+            .updateY()
+            .recalculateDrawPoints();
+
+        this.clearCanvas()
+            .drawRectangles();
+            // .drawAxisX();
+            // .drawAxisY();
+
+        this.drawWidget({
+            x: this.drawPoints.x[this.bet.index] + this.pixelsPerPoint.x/2,
+            y: this.drawPoints.y[this.bet.index]
+        });
+
+        return this;
+    }
+
+    showResult(result) {
+        // Amount won is y proportion * bet step + minPayout
+        // this.bet.won = ;
+        this.clearCanvas()
+            .recalculateDrawPoints()
+            .drawRectangles()
+            .highlightColumn(this.x.indexOf(result))
+            .drawRectangle(this.x.indexOf(result))
+            //.drawAxisX()
+            .drawWidget({
+                x: this.drawPoints.x[this.bet.index] + this.pixelsPerPoint.x/2,
+                y: this.drawPoints.y[this.bet.index]
+            });
         return this;
     }
 }
