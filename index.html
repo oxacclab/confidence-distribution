@@ -100,16 +100,25 @@
             canvas: document.getElementById('myCanvas'),
             xMin: 0,
             xMax: 100,
+            minPrecision: .25,
+            maxPrecision: .90,
             style: {
-                showWidgetLabel: false
+                gutterX: 5,
+                gutterY: 15,
+                paddingX: 40,
+                paddingY: 40,
+                axisTickSizeX: 10,
+                precisionPadding: .05,
+                precisionStart: .15,
+                showWidgetLabel: true
             },
             callback: {
                 onUpdate: ()=>window.enableAnswerButton()
             }
-        });
+        }).drawAxisX();
 
         window.nextRound = function() {
-            window.dist = new Distribution(window.dist).clearCanvas();
+            window.dist = new Distribution(window.dist).clearCanvas().drawAxisX();
             window.round += 1;
             document.getElementById("RoundCounter").innerText = window.round.toString();
             buttons.nextRound.disabled = true;
@@ -150,11 +159,11 @@
             // disable canvas interactions
             dist.canvas.registerClickMouse(false);
             // update score
-            let score = parseInt(document.getElementById('ScoreCounter').innerText);
-            score += Math.round(dist.canvas.clientHeight - dist.drawPoints.y[dist.x.indexOf(answer)]);
+            let score = parseFloat(document.getElementById('ScoreCounter').innerText);
+            score += parseFloat(dist.yToPayout(dist.y[dist.x.indexOf(answer)]).toFixed(2));
             if(isNaN(score))
                 score = 0;
-            document.getElementById('ScoreCounter').innerText = score.toString();
+            document.getElementById('ScoreCounter').innerText = score.toFixed(2);
             let rounds = parseFloat(document.getElementById('RoundCounter').innerText);
             let mean = score/rounds;
             if(isNaN(mean))
