@@ -1,5 +1,6 @@
 "use strict";
 
+// TODO: Move distribution drawing onto new coordinate system
 // TODO: centre on canvas in x dimension
 // TODO: yInt adjustment?
 // TODO: y cap needs to accommodate AUC adjustment
@@ -133,10 +134,32 @@ class Distribution {
      */
     static get defaultStyle() {
         return {
+            gutterX: 0,
+            gutterY: 0,
             paddingX: 0,
             paddingY: 0,
+
             widgetSize: 5,
-            showWidgetLabel: true
+            showWidgetLabel: true,
+
+            axisStrokeStyleX: 'black',
+            axisLineWidthX: 2,
+            axisTicksX: 10,
+            axisTickSizeX: 5,
+            axisLabelFontX: 'Arial',
+            axisLabelFontSizeX: 16,
+            axisPositionX: 0,
+
+            axisStrokeStyleY: 'black',
+            axisLineWidthY: 2,
+            axisTicksY: 10,
+            axisTickSizeY: 5,
+            axisLabelFontY: 'Arial',
+            axisLabelFontSizeY: 16,
+            axisPositionY: 0,
+
+            precisionPadding: .0,
+            precisionStart: .0
         };
     }
 
@@ -447,59 +470,6 @@ class Distribution {
         return this;
     }
 
-    drawAxisX() {
-        let ctx = this.canvas.getContext('2d');
-        ctx.strokeStyle = 'black';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(0, this.canvas.clientHeight);
-        ctx.lineTo(this.canvas.clientWidth, this.canvas.clientHeight);
-        ctx.strokeStyle = 'black';
-        ctx.stroke();
-        return this;
-    }
-
-    drawAxisY() {
-        let tickWidth = 5;
-
-        // line
-        let ctx = this.canvas.getContext('2d');
-        ctx.strokeStyle = 'black';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(this.canvas.clientWidth/2, 0);
-        ctx.lineTo(this.canvas.clientWidth/2, this.canvas.clientHeight);
-        ctx.strokeStyle = 'black';
-        ctx.stroke();
-
-        // tics
-        let payoutStep = (this.maxBet - this.minBet) / (this.maxPrecision - this.minPrecision);
-        let minPayout = this.minBet - payoutStep * this.minPrecision;
-        let payouts = [];
-        for(let i = 0; i < this.maxPrecision * 100; i++) {
-            payouts[i] = minPayout + payoutStep * (i+1) / 100;
-        }
-        payouts = payouts.reverse();
-        // this.payouts = payouts;
-
-        let ticks = 18;
-
-        for(let i = 0; i < ticks; i++) {
-            ctx.beginPath();
-            ctx.moveTo(this.canvas.clientWidth/2, i*(this.maxPrecision/ticks)*this.pixelsPerPoint.y);
-            ctx.lineTo(this.canvas.clientWidth/2 + tickWidth, i*(this.maxPrecision/ticks)*this.pixelsPerPoint.y);
-            ctx.strokeText(
-                payouts[Math.round(payouts.length/ticks*i)].toFixed(2),
-                this.canvas.clientWidth/2 + tickWidth * 2,
-                i*(this.maxPrecision/ticks)*this.pixelsPerPoint.y
-            );
-            ctx.stroke();
-
-        }
-
-        return this;
-    }
-
     /**
      * Draw the moving widget
      * @param centre {{x: number, y: number}} coordinates for the widget's centre
@@ -562,9 +532,9 @@ class Distribution {
             .recalculateDrawPoints();
 
         this.clearCanvas()
-            .drawRectangles();
-            // .drawAxisX();
-            // .drawAxisY();
+            .drawRectangles()
+            .drawAxisX()
+            .drawAxisY();
 
         this.drawWidget({
             x: this.drawPoints.x[this.bet.index] + this.pixelsPerPoint.x/2,
@@ -574,6 +544,11 @@ class Distribution {
         return this;
     }
 
+    /**
+     * Draw the result by redrawing the display and overlaying a highlighted column.
+     * @param result
+     * @return {Distribution}
+     */
     showResult(result) {
         // Amount won is y proportion * bet step + minPayout
         // this.bet.won = ;
@@ -582,12 +557,287 @@ class Distribution {
             .drawRectangles()
             .highlightColumn(this.x.indexOf(result))
             .drawRectangle(this.x.indexOf(result))
-            //.drawAxisX()
+            .drawAxisX()
             .drawWidget({
                 x: this.drawPoints.x[this.bet.index] + this.pixelsPerPoint.x/2,
                 y: this.drawPoints.y[this.bet.index]
             });
         return this;
+    }
+
+    /**
+     * The gutter runs along the edges of the canvas and is adjusted to ensure the content is centred on the canvas.
+     * @return {{x: number, y: number}}
+     */
+    get gutter() {
+        let graphGap = this.canvas.clientWidth - (this.pixelsPerPoint.x * (this.xMax - this.xMin));
+        return {
+            x: this.style.gutterX + graphGap/2,
+            y: this.style.gutterY
+        }
+    }
+
+    /**
+     * Panel is the bit the graph is drawn on: canvas minus gutter and padding
+     * @return {{left: *, right: *, top: *, bottom: *, height: *, width: *}}
+     */
+    get panel() {
+        let out = {
+            left: this.gutter.x + this.style.paddingX,
+            top: this.gutter.y + this.style.paddingY
+        };
+        out.width = this.canvas.clientWidth - out.left*2;
+        out.height = this.canvas.clientHeight - out.top*2;
+        out.bottom = out.top + out.height; // saves a lot of repetition
+        out.right = out.left + out.width;
+        return out;
+    }
+
+    /**
+     * Scaling factor to map precision ratings to pixels.
+     * Precision to pixels = precision * precisionRange
+     * Pixels to precision = pixels / precisionRange
+     */
+    get precisionScale() {
+        let precisionRange = this.maxPrecision + this.style.precisionPadding - this.style.precisionStart;
+        let pixelRange = this.panel.height;
+        return pixelRange/precisionRange;
+    }
+
+    /**
+     * Scale payout values to pixels
+     * @return {number}
+     */
+    get payoutScale() {
+        // find minPrecision as y-coordinate
+        let betRange = this.maxBet - this.minBet;
+        let precisionRange = this.maxPrecision - this.minPrecision;
+        let betAsPrecision = precisionRange / betRange;
+        return betAsPrecision * this.precisionScale;
+    }
+
+    /**
+     * Return a payout or bet value as a y coordinate
+     * @param payout {number} payout to plot
+     * @return {number} y-coordinate for plotting
+     */
+    payoutToY(payout) {
+        return (this.minPrecision - this.style.precisionStart) * this.precisionScale +
+            (payout - this.minBet) * this.payoutScale;
+    }
+
+    /**
+     * Return a y coordinate as a payout value
+     * @param y {number} y-coordinate
+     * @return {number} payout value
+     */
+    yToPayout(y) {
+        return this.minBet +
+            (y - (this.minPrecision - this.style.precisionStart) * this.precisionScale) / this.payoutScale;
+    }
+
+    /**
+     * Draw the value axis
+     * @param [y] {number} y coordinate at which to draw the axis
+     * @return {Distribution} self for chaining
+     */
+    drawAxisX(y) {
+        let ctx = this.canvas.getContext('2d');
+        // line
+        y = typeof y === "undefined"? this.panel.top + this.panel.height + this.style.axisPositionX : y;
+        ctx.strokeStyle = this.style.axisStrokeStyleX;
+        ctx.lineWidth = this.style.axisLineWidthX;
+        ctx.beginPath();
+        ctx.moveTo(this.panel.left, y);
+        ctx.lineTo(this.panel.left + this.panel.width, y);
+        ctx.strokeStyle = this.style.axisStrokeStyleX;
+        ctx.stroke();
+        // ticks
+        let tickDistance = this.panel.width / this.style.axisTicksX;
+        ctx.font = this.style.axisLabelFontX + ' ' + this.style.axisLabelFontSizeX.toString() + 'px';
+        ctx.textAlign = 'center';
+        let label = "";
+        for(let i = 0; i <= this.style.axisTicksX; i++) {
+            ctx.moveTo(this.panel.left + i*tickDistance, y);
+            ctx.lineTo(this.panel.left + i*tickDistance, y+this.style.axisTickSizeX);
+            ctx.stroke();
+            label = this.x[i*Math.round(this.x.length / this.style.axisTicksX)];
+            ctx.strokeText(label, this.panel.left + i*tickDistance, y + this.style.axisTickSizeX*2);
+        }
+        return this;
+    }
+
+    /**
+     * Draw the payout axis
+     * @param [x] {number} x coordinate at which to draw the axis
+     * @return {Distribution} self for chaining
+     */
+    drawAxisY(x) {
+        // payouts are defined by clamping minBet to minPrecision and maxBet to maxPrecision
+        x = typeof x === "undefined"? this.panel.left + this.style.axisPositionY : x;
+        let ctx = this.canvas.getContext('2d');
+        ctx.strokeStyle = this.style.axisStrokeStyleY;
+        ctx.lineWidth = this.style.axisLineWidthY;
+        ctx.beginPath();
+        ctx.moveTo(x, this.panel.height + this.panel.top);
+        ctx.lineTo(x, this.panel.top);
+        ctx.stroke();
+        // ticks
+        let tickDistance = this.panel.height / 10;
+        let label = "";
+        for(let i = 0; i <= 10; i++) {
+            ctx.moveTo(x, this.panel.height + this.panel.top - tickDistance*i);
+            ctx.lineTo(x - this.style.axisTickSizeY, this.panel.height + this.panel.top - tickDistance*i);
+            ctx.stroke();
+            label = this.yToPayout(i*this.panel.height/10).toFixed(2);
+            ctx.strokeText(
+                label,
+                x - this.style.axisTickSizeY*2,
+                this.panel.height + this.panel.top - tickDistance*i + this.style.axisLabelFontSizeY/4);
+        }
+        return this;
+    }
+
+    /**
+     * Draw guide axes to illustrate the different customisation properties.
+     * Draws the following:
+     * * Gutters (black fill)
+     * * Padding (green fill)
+     * * x axis showing % of pixel space (black)
+     * * y axis showing x values (black)
+     * * min/maxPrecision boundaries (pink)
+     * * precision scale from style.precisionStart to maxPrecision+style.precisionPadding (red)
+     * * payout scale (black, central)
+     * * betting scale over allowed betting space (blue)
+     */
+    showGuides() {
+        let ctx = this.canvas.getContext('2d');
+
+        // Gutters
+        // adjust for centering the display
+        ctx.beginPath();
+        ctx.fillStyle = 'black';
+        ctx.fillRect(0,0,this.gutter.x,this.canvas.clientHeight);
+        ctx.fillRect(0,0,this.canvas.clientWidth,this.gutter.y);
+        ctx.fillRect(0,this.canvas.clientHeight-this.gutter.y,this.canvas.clientWidth,this.gutter.y);
+        ctx.fillRect(this.canvas.clientWidth-this.gutter.x,0,this.gutter.x,this.canvas.clientHeight);
+
+        // Padding
+        let paddingLeft = this.gutter.x;
+        let paddingTop = this.gutter.y;
+        let paddingWidth = this.canvas.clientWidth - this.gutter.x*2;
+        let paddingHeight = this.canvas.clientHeight - this.gutter.y*2;
+        ctx.fillStyle = 'lightgreen';
+        ctx.fillRect(paddingLeft, paddingTop, this.style.paddingX, paddingHeight);
+        ctx.fillRect(paddingLeft, paddingTop, paddingWidth, this.style.paddingY);
+        ctx.fillRect(
+            paddingLeft,
+            this.canvas.clientHeight - this.gutter.y - this.style.paddingY,
+            paddingWidth,
+            this.style.paddingY);
+        ctx.fillRect(
+            this.canvas.clientWidth - this.gutter.x - this.style.paddingX,
+            paddingTop,
+            this.style.paddingX,
+            paddingHeight);
+
+        // Precision limits
+        ctx.strokeStyle = 'pink';
+        ctx.moveTo(
+            this.panel.left,
+            this.panel.bottom - (this.maxPrecision - this.style.precisionStart) * this.precisionScale);
+        ctx.lineTo(
+            this.panel.left + this.panel.width,
+            this.panel.bottom - (this.maxPrecision - this.style.precisionStart) * this.precisionScale);
+        ctx.stroke();
+        ctx.moveTo(
+            this.panel.left,
+            this.panel.bottom - (this.minPrecision - this.style.precisionStart) * this.precisionScale);
+        ctx.lineTo(
+            this.panel.left + this.panel.width,
+            this.panel.bottom - (this.minPrecision - this.style.precisionStart) * this.precisionScale);
+        ctx.stroke();
+
+        // X Axis
+        this.drawAxisX();
+
+        // Y Axes
+
+        // 1. Y space
+        // line
+        let yAxisX = this.panel.left + this.style.axisPositionY;
+        ctx.strokeStyle = this.style.axisStrokeStyleY;
+        ctx.lineWidth = this.style.axisLineWidthY;
+        ctx.beginPath();
+        ctx.moveTo(yAxisX, this.panel.bottom);
+        ctx.lineTo(yAxisX, this.panel.top);
+        ctx.stroke();
+
+        // tics
+        let tickDistance = this.panel.height / this.style.axisTicksY;
+        ctx.font = this.style.axisLabelFontY + ' ' + this.style.axisLabelFontSizeY.toString() + 'px';
+        ctx.textAlign = 'right';
+        let label = "";
+        for(let i = 0; i <= this.style.axisTicksY; i++) {
+            ctx.moveTo(yAxisX, this.panel.bottom - tickDistance*i);
+            ctx.lineTo(yAxisX - this.style.axisTickSizeY, this.panel.bottom - tickDistance*i);
+            ctx.stroke();
+            label = Math.round(100/this.style.axisTicksY*i).toFixed(1);
+            ctx.strokeText(
+                label,
+                yAxisX - this.style.axisTickSizeY*2,
+                this.panel.height + this.panel.top - tickDistance*i + this.style.axisLabelFontSizeY/4);
+        }
+
+        // 2. Precision space
+        // draw another y axis indented a bit which shows the precision space
+        let precisionX = this.panel.left + this.panel.width * .25;
+        ctx.strokeStyle = 'red';
+        ctx.beginPath();
+        ctx.moveTo(precisionX, this.panel.bottom);
+        ctx.lineTo(
+            precisionX,
+            this.panel.bottom - (this.maxPrecision - this.style.precisionStart)*this.precisionScale);
+        ctx.stroke();
+        // ticks
+        tickDistance = (this.maxPrecision - this.style.precisionStart) / 10 * this.precisionScale;
+        label = "";
+        for(let i = 0; i <= 10; i++) {
+            ctx.moveTo(precisionX, this.panel.bottom - tickDistance*i);
+            ctx.lineTo(precisionX - this.style.axisTickSizeY, this.panel.bottom - tickDistance*i);
+            ctx.stroke();
+            label = (this.style.precisionStart + i*(this.maxPrecision - this.style.precisionStart)/10).toFixed(2);
+            ctx.strokeText(
+                label,
+                precisionX - this.style.axisTickSizeY*2,
+                this.panel.height + this.panel.top - tickDistance*i + this.style.axisLabelFontSizeY/4);
+        }
+
+        // 3. Payout space
+        this.drawAxisY(this.panel.left + this.panel.width * .5);
+
+        // 4. Betting space
+        // betting space is defined by the minBet for minPrecision and maxBet for maxPrecision
+        let betX = this.panel.left + this.panel.width * .75;
+        let betY = this.panel.bottom - this.payoutToY(this.minBet);
+        ctx.strokeStyle = 'blue';
+        ctx.beginPath();
+        ctx.moveTo(betX, betY);
+        ctx.lineTo(betX, this.panel.bottom - this.payoutToY(this.maxBet));
+        ctx.stroke();
+        // ticks
+        tickDistance = (this.maxBet - this.minBet) * this.payoutScale / 10;
+        label = "";
+        for(let i = 0; i <= 10; i++) {
+            ctx.moveTo(betX, betY - tickDistance*i);
+            ctx.lineTo(betX - this.style.axisTickSizeY, betY - tickDistance*i);
+            ctx.stroke();
+            label = (this.minBet + i*(this.maxBet - this.minBet)/10).toFixed(2);
+            ctx.strokeText(
+                label,
+                betX - this.style.axisTickSizeY*2,
+                betY - tickDistance*i + this.style.axisLabelFontSizeY/4);
+        }
     }
 }
 

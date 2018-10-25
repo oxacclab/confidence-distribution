@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Example confidence Distribution</title>
+    <style type="text/css">
+        #Instructions {
+            text-align: center;
+            height: 2em;
+        }
+        #Interface {
+            display: inline-flex;
+        }
+        #LeftPanel {
+            min-width: 850px;
+        }
+        #RightPanel {
+            width: 150px;
+            color: white;
+            font-size: 20px;
+        }
+        #Wrapper {
+            display: block;
+            margin: auto;
+            width: 1000px;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            /* bring your own prefixes */
+            transform: translate(-50%, -50%);
+        }
+        .counter {
+            text-align: right;
+            font-weight: bold;
+            font-size: 1.2em;
+        }
+        body {
+        }
+        button {
+            display: block;
+            margin: 1.5em auto auto;
+            width: 100%;
+            height: 2em;
+            border: none;
+            background-color: whitesmoke;
+            font-size: 1em;
+        }
+        button:disabled {
+            display: none;
+        }
+        canvas {
+            border: 5px solid pink;
+            margin: auto;
+            display: block;
+            background-color: white;
+        }
+        p {
+            margin-bottom: 0;
+        }
+    </style>
+</head>
+<body>
+    <div id="Wrapper">
+        <div id="Instructions">
+            <p><em>Click on the panel to mark your guess, then press 'show result' to see the result.</em></p>
+        </div>
+        <div id="Interface">
+            <div id="LeftPanel" class="panel">
+                <canvas width="808" height="500" id="myCanvas"></canvas>
+            </div>
+            <div id="RightPanel" class="panel">
+                <div class="scores">
+                    <p class="label">Round #:</p>
+                    <p class="counter"><span id="RoundCounter">1</span></p>
+                    <p class="label">Current score:</p>
+                    <p class="counter"><span id="ScoreCounter">0</span></p>
+                    <p class="label">Score/round:</p>
+                    <p class="counter"><span id="Average">0</span></p>
+                </div>
+                <button onclick="clickButton()" id="ShowResultButton" disabled="disabled">(S)how result</button>
+                <button onclick="nextRound()" id="NextRoundButton" disabled="disabled">(N)ext round</button>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        import {Distribution} from "./src/distribution.js";
+
+        window.buttons = {
+            showResults: document.getElementById('ShowResultButton'),
+            nextRound: document.getElementById('NextRoundButton')
+        };
+
+        window.round = 0;
+
+        window.dist = new Distribution({
+            canvas: document.getElementById('myCanvas'),
+            xMin: -100,
+            xMax: 100,
+            minPrecision: .45,
+            maxPrecision: .90,
+            style: {
+                gutterX: 5,
+                gutterY: 15,
+                paddingX: 40,
+                paddingY: 40,
+                axisTickSizeX: 10,
+                precisionPadding: .05,
+                precisionStart: .15,
+                showWidgetLabel: false
+            },
+            callback: {
+                onUpdate: ()=>window.enableAnswerButton()
+            }
+        });
+        dist.showGuides();
+
+        window.nextRound = function() {
+        }
+    </script>
+    <script type="text/javascript">
+
+        function clickButton() {
+        }
+
+        window.enableAnswerButton = function() {
+            buttons.showResults.disabled = false;
+        };
+    </script>
+</body>
+</html>
