@@ -1,11 +1,8 @@
 "use strict";
 
 // TODO: yInt adjustment?
-// TODO: y cap needs to accommodate AUC adjustment
-// TODO: accommodate AUC adjustment into y mouse detection
 // TODO: highlight hovered option
 // TODO: widget label style options
-// TODO: callback for drawing x axis options or customisable function
 
 
 class Distribution {
@@ -37,6 +34,7 @@ class Distribution {
      * @param [args.maxPrecision = 1.0] {number} - maximum distribution precision (between 0 and 1)
      * @param [args.minBet = .0] {number} - minimum bet amount allowed. Assigned to minPrecision.
      * @param [args.maxBet = 1.0] {number} - maximum bet allowed. Assigned to maxPrecision.
+     * @param [args.scaleFactor = 10] {number} - factor by which to scale the curve width
      *
      * @param [args.constantAUC = true] {boolean} - whether to increase inbounds values where parts of
      * the distribution are outside of the limits of the x axis.
@@ -50,7 +48,7 @@ class Distribution {
      * @return {Distribution}
      */
     constructor(args) {
-        this.canvas = typeof args.canvas === "undefined"? null : args.canvas;
+        let canvas = typeof args.canvas === "undefined"? null : args.canvas;
         this.xMin = typeof args.xMin === "undefined"? 0 : args.xMin;
         this.xMax = typeof args.xMax === "undefined"? 100 : args.xMax;
         this.xPoints = typeof args.xPoints === "undefined"? this.xMax - this.xMin : args.xPoints;
@@ -59,16 +57,13 @@ class Distribution {
         this.maxPrecision = typeof args.maxPrecision === "undefined"? .9 : args.maxPrecision;
         this.minBet = typeof args.minBet === "undefined"? .10 : args.minBet;
         this.maxBet = typeof args.maxBet === "undefined"? .90 : args.maxBet;
-
-        this.constantAUC = typeof args.constantAUC === "undefined"? true : args.constantAUC;
-
-        this.style = Distribution.defaultStyle;
-        if(typeof args.style !== "undefined")
-            Object.keys(args.style).forEach((k)=>this.style[k] = args.style[k]);
+        this.scaleFactor = typeof args.scaleFactor === "undefined"? 10 : args.scaleFactor;
 
         this.callback = Distribution.defaultCallbacks;
         if(typeof args.callback !== "undefined")
             Object.keys(args.callback).forEach((k)=>this.callback[k] = args.callback[k]);
+
+        this.registerCanvas(canvas);
 
         // cartesian coordinates
         this.x = [];
@@ -80,6 +75,9 @@ class Distribution {
         }
         this.y = [];
 
+        this.precisionRaw = [];
+        this.precision = [];
+
         // betting coordinates
         this.bet = {
             y: 0, // y coordinate
@@ -89,30 +87,28 @@ class Distribution {
             won: 0.0
         };
 
-        this.canvas.distribution = this;
-        this.canvas.drawToCanvas = function(event) {
-            this.distribution.drawToCanvas(event);
-        };
-        this.canvas.clickMouse = function(clickEvent) {
-            this.registerTrackMouse();
-            this.drawToCanvas(clickEvent)
-        };
-        this.canvas.registerTrackMouse = function(enable = true) {
-            if(enable)
-                this.addEventListener('mousemove', this.drawToCanvas);
-            else
-                this.removeEventListener('mousemove', this.drawToCanvas);
-        };
-        this.canvas.registerClickMouse = function(enable = true) {
-            if(enable)
-                this.addEventListener('mousedown', this.clickMouse);
-            else
-                this.removeEventListener('mousedown', this.clickMouse);
-        };
+        this.style = Distribution.defaultStyle;
+        if(typeof args.style !== "undefined")
+            Object.keys(args.style).forEach((k)=>this.style[k] = args.style[k]);
 
-        this.canvas.addEventListener('mouseup', ()=>this.canvas.registerTrackMouse(false));
-        this.canvas.addEventListener('mouseout', ()=>this.canvas.registerTrackMouse(false));
-        this.canvas.registerClickMouse(true);
+        this.constantAUC = typeof args.constantAUC === "undefined"? true : args.constantAUC;
+
+        if(this.style.precisionPadding === 'auto') {
+            // by default precision padding means the top of the curve is visible when AUC adjusted at extremes
+            this.style.precisionPadding = this.maxPossiblePrecision - this.maxPrecision;
+        }
+        this.style.precisionPadding += this.style.precisionMargin;
+
+        if(this.constantAUC)
+            this.adjustedLimits = {
+                low: this.adjustForAUC(this.minPrecision),
+                high: this.adjustForAUC(this.maxPrecision)
+            };
+        else
+            this.adjustedLimits = {
+                low: null,
+                high: null
+            };
 
         // timing of key events
         this.time = {
@@ -120,6 +116,8 @@ class Distribution {
             start: new Date().getTime(),
         };
 
+        if(typeof this.callback.onFinishLoading === "function")
+            this.callback.onFinishLoading();
         return this;
     }
 
@@ -152,7 +150,8 @@ class Distribution {
             axisLabelFontSizeY: 16,
             axisPositionY: 0,
 
-            precisionPadding: .0,
+            precisionPadding: 'auto',
+            precisionMargin: .0, // margin is added to padding and allows extra padding on an auto value for padding
             precisionStart: .0
         };
     }
@@ -162,8 +161,49 @@ class Distribution {
      */
     static get defaultCallbacks() {
         return {
-            onUpdate: null
+            onUpdate: null,
+            onRegisterCanvas: null,
+            onFinishLoading: null,
+            onDraw: null
         };
+    }
+
+    /**
+     * Performs mutual registration between a canvas and the Distribution
+     * @param canvas {HTMLCanvasElement} canvas element
+     * @return {Distribution} self for chaining
+     */
+    registerCanvas(canvas) {
+        this.canvas = canvas;
+        this.canvas.distribution = this;
+        this.canvas.drawToCanvas = function(event) {
+            this.distribution.drawToCanvas(event);
+        };
+        this.canvas.clickMouse = function(clickEvent) {
+            this.registerTrackMouse();
+            this.drawToCanvas(clickEvent)
+        };
+        this.canvas.registerTrackMouse = function(enable = true) {
+            if(enable)
+                this.addEventListener('mousemove', this.drawToCanvas);
+            else
+                this.removeEventListener('mousemove', this.drawToCanvas);
+        };
+        this.canvas.registerClickMouse = function(enable = true) {
+            if(enable)
+                this.addEventListener('mousedown', this.clickMouse);
+            else
+                this.removeEventListener('mousedown', this.clickMouse);
+        };
+
+        this.canvas.addEventListener('mouseup', ()=>this.canvas.registerTrackMouse(false));
+        this.canvas.addEventListener('mouseout', ()=>this.canvas.registerTrackMouse(false));
+        this.canvas.registerClickMouse(true);
+
+        if(typeof this.callback.onRegisterCanvas === "function")
+            this.callback.onRegisterCanvas();
+
+        return this;
     }
 
     /**
@@ -217,6 +257,48 @@ class Distribution {
     }
 
     /**
+     * Return the constant area-under-curve adjusted y coordinates
+     * @param x {number} mean/modal x value
+     * @param xValues {number[]} x values
+     * @param yValues {number[]} precision values corresponding to x values
+     * @return {number[]} precision values adjusted for AUC
+     */
+    static adjustForConstantAUC(x, xValues, yValues) {
+        let yValuesNew = yValues;
+        // Remainder is the absolute difference of tail areas
+        let remainder = 0;
+        for(let i = 0; i < xValues.length; i++) {
+            if(xValues[i] < x)
+                remainder += yValues[i];
+            else if(xValues[i] > x)
+                remainder -= yValues[i];
+        }
+        remainder = Math.abs(remainder);
+        if(remainder/xValues.length > 0) {
+            // increase each y value proportionately to its current value
+            let sum = utils.sum(yValues);
+            for(let i = 0; i < yValues.length; i++) {
+                yValuesNew[i] += remainder * (yValues[i] / sum);
+            }
+        }
+        return yValuesNew;
+    }
+
+    /**
+     * Generate the AUC adjusted peak precision values for the distribution's x values at a specified precision
+     * @param precision {number} precision value for which to calculate the adjusted curve
+     * @return {number[]} precision values adjusted for constant area-under-curve
+     */
+    adjustForAUC(precision) {
+        let out = [];
+        for(let i = 0; i < this.x.length; i++) {
+            let y = Distribution.f(this.x, this.x[i], this.getSD(precision));
+            out[i] = Distribution.adjustForConstantAUC(this.x[i], this.x, y)[i];
+        }
+        return out;
+    }
+
+    /**
      * Find the maximum number of pixels assignable to each point, and the number of pixels left over
      * @param points {int} number of points required
      * @param pixels {int} number of pixels available
@@ -229,15 +311,13 @@ class Distribution {
     }
 
     /**
-     * @return {number} the standardized height of the graph used for interpreting y values and cursor position
+     * @return {number} Precision value at the extremes of x value and maxPrecision with AUC adjustment
      */
-    get proportionalSpaceY() {
-        let AUC = 0;
-        if(this.constantAUC) {
-            // Needs an adjustment term to account for constant AUC
-            // ...
-        }
-        return(this.maxPrecision + this.style.paddingY + AUC);
+    get maxPossiblePrecision() {
+        if(!this.constantAUC)
+            return this.maxPrecision;
+        let y = Distribution.f(this.x, this.x[this.x.length-1], this.getSD(this.maxPrecision));
+        return Distribution.adjustForConstantAUC(this.x[this.x.length-1], this.x, y)[this.x.length-1] * this.scale;
     }
 
     /**
@@ -247,9 +327,28 @@ class Distribution {
     get pixelsPerPoint() {
         return {
             x: Distribution.getPixelRatio(this.x.length, this.canvas.clientWidth).ratio,
-            y: Distribution.getPixelRatio(this.proportionalSpaceY,
+            y: Distribution.getPixelRatio(this.maxPossiblePrecision - this.style.precisionStart,
                 this.canvas.clientHeight).ratio // y axis 0:maxPrecision
         };
+    }
+
+    get scale() {
+        // scale standard deviation and precision to x axis
+        return this.x.length / this.scaleFactor;
+    }
+
+    /**
+     * Return the standard deviation required to peak at a given precision value
+     * @param [precision] {number} precision value at which to peak. Defaults to the current bet precision.
+     * @return {number} standard deviation of the distribution
+     */
+    getSD(precision) {
+        if(typeof precision ===  "undefined")
+            precision = this.bet.precision;
+
+        // sd has to be such that the highest y value should be the mean specified by the user
+        // This can be obtained by rearranging the normal distribution formula for x = mode(x)
+        return 1 / (Distribution.root2pi * precision / this.scale);
     }
 
     /**
@@ -275,6 +374,39 @@ class Distribution {
         return {x, y};
     }
 
+    findPrecisionWhichAdjustsTo(targetPrecision, maxError = 0.00001, maxCycles = 1000) {
+        let testPrecision = targetPrecision;
+        let cycles = 0;
+        let searchDownwards = false;
+        let stepSize = .5;
+        let best = {input: testPrecision, result: testPrecision, error: Infinity};
+        while(cycles++ < maxCycles) {
+            let y = Distribution.f(this.x, this.bet.on, this.getSD(testPrecision));
+            let result = Distribution.adjustForConstantAUC(this.bet.on, this.x, y)[this.bet.index] * this.scale;
+            let error = Math.abs(result - targetPrecision);
+
+            // update best value
+            if (best.error > error) {
+                // getting warmer...
+                best = {input: testPrecision, result, error};
+                if(best.error < maxError)
+                    break; // good enough, we're done
+            } else {
+                // colder - do something different
+                // reduce step size
+                stepSize /= 2;
+                // reverse search direction
+                searchDownwards = !searchDownwards;
+                // go back to our best result
+                testPrecision = best.input;
+            }
+
+            testPrecision += (searchDownwards? -1 : 1) * stepSize;
+        }
+
+        return cycles >= maxCycles? NaN : best.input;
+    }
+
     /**
      * Calculate the mean and precision as a function of the cursor position
      * @return {Distribution} - return self for chaining
@@ -282,8 +414,16 @@ class Distribution {
     updateFromCursor(clickEvent) {
         let cursor = this.getCursorCoordinates(clickEvent);
 
+        // desired mean is the x equivalent value of the mouse x coordinate clamped by the max
+        this.bet.index = Math.min(Math.floor(cursor.x / this.panel.width * this.x.length), this.x.length-1);
+        this.bet.on = this.x[this.bet.index];
+
         // y as proportion of space available
         this.bet.precision = this.yToPrecision(cursor.y);
+
+        if(this.constantAUC) {
+            this.bet.precision = this.findPrecisionWhichAdjustsTo(this.bet.precision);
+        }
 
         // Clamp by allowed precision range
         this.bet.precision = this.bet.precision < this.minPrecision?
@@ -294,9 +434,6 @@ class Distribution {
 
         // desired bet amount is proportion of the betting space available
         this.bet.amount = this.yToPayout(this.bet.y);
-        // desired mean is the x equivalent value of the mouse x coordinate clamped by the max
-        this.bet.index = Math.min(Math.floor(cursor.x / this.panel.width * this.x.length), this.x.length-1);
-        this.bet.on = this.x[this.bet.index];
         this.bet.time = new Date().getTime();
 
         if(typeof this.callback.onUpdate === "function")
@@ -311,39 +448,19 @@ class Distribution {
      * @return Distribution - return self for chaining
      */
     updateY() {
-        // scale to x axis
-        let scale = this.x.length / 10;
-        // sd has to be such that the highest y value should be the mean specified by the user
-        // This can be obtained by rearranging the normal distribution formula for x = mode(x)
-        let sd = 1 / (Distribution.root2pi * this.bet.precision / scale);
-
         // Calculate the y values
-        this.yRaw = Distribution.f(this.x, this.bet.on, sd);
+        this.precisionRaw = Distribution.f(this.x, this.bet.on, this.getSD());
 
         // Adjust y values for cases where the distribution has portions which are out-of-range
-        if(this.constantAUC) {
-            // Remainder is the absolute difference of tail areas
-            let remainder = 0;
-            for(let i = 0; i < this.x.length; i++) {
-                if(this.x[i] < this.bet.on)
-                    remainder += this.yRaw[i];
-                if(this.x[i] > this.bet.on)
-                    remainder -= this.yRaw[i];
-            }
-            remainder = Math.abs(remainder);
-            if(remainder/this.x.length !== 0) {
-                // increase each y value proportionately to its current value
-                let sum = utils.sum(this.yRaw);
-                for(let i = 0; i < this.yRaw.length; i++) {
-                    this.yRaw[i] += remainder * (this.yRaw[i] / sum);
-                }
-            }
-        }
+        if(this.constantAUC)
+            this.precision = Distribution.adjustForConstantAUC(this.bet.on, this.x, this.precisionRaw);
+        else
+            this.precision = this.precisionRaw;
 
         // Scale resulting y values to match x axis range
         // let range = this.xMax - this.xMin;
-        for(let i = 0; i < this.yRaw.length; i++)
-            this.y[i] = this.precisionToY(this.yRaw[i] * scale);
+        for(let i = 0; i < this.precision.length; i++)
+            this.y[i] = this.precisionToY(this.precision[i] * this.scale);
 
         return this;
     }
@@ -484,7 +601,8 @@ class Distribution {
             y: this.y[this.bet.index]
         });
 
-        //this.showGuides()
+        if(typeof this.callback.onDraw === "function")
+            this.callback.onDraw();
 
         return this;
     }
@@ -495,8 +613,8 @@ class Distribution {
      * @return {Distribution}
      */
     showResult(result) {
-        // Amount won is y proportion * bet step + minPayout
-        // this.bet.won = ;
+        // Save amount won
+        this.bet.won = this.yToPayout(this.y[this.bet.index]);
         this.clearCanvas()
             .drawRectangles()
             .highlightColumn(this.x.indexOf(result))
@@ -506,6 +624,10 @@ class Distribution {
                 x: this.valueToX(this.x[this.bet.index]) + this.pixelsPerPoint.x/2,
                 y: this.y[this.bet.index]
             });
+
+        if(typeof this.callback.onDraw === "function")
+            this.callback.onDraw();
+
         return this;
     }
 
@@ -543,7 +665,7 @@ class Distribution {
      * @return {number} x coordinate for plotting
      */
     valueToX(value) {
-        return this.panel.left + this.panel.width / this.x.length * value;
+        return this.panel.left + this.panel.width / this.x.length * (value - this.xMin);
     }
 
     /**
@@ -552,7 +674,7 @@ class Distribution {
      * Pixels to precision = pixels / precisionScale
      */
     get precisionScale() {
-        let precisionRange = this.maxPrecision + this.style.precisionPadding - this.style.precisionStart;
+        let precisionRange = this.maxPrecision + this.style.precisionPadding;
         let pixelRange = this.panel.height;
         return pixelRange/precisionRange;
     }
@@ -668,6 +790,7 @@ class Distribution {
      * * x axis showing % of pixel space (black)
      * * y axis showing x values (black)
      * * min/maxPrecision boundaries (pink)
+     * * AUC-adjusted precision boundaries (orange, if applicable)
      * * precision scale from style.precisionStart to maxPrecision+style.precisionPadding (red)
      * * payout scale (black, central)
      * * betting scale over allowed betting space (blue)
@@ -719,6 +842,29 @@ class Distribution {
             this.panel.left + this.panel.width,
             this.panel.bottom - (this.minPrecision - this.style.precisionStart) * this.precisionScale);
         ctx.stroke();
+
+        // AUC-adjusted precision limits
+        if(this.constantAUC) {
+            let limits = [];
+            ctx.strokeStyle = 'orange';
+            for(let j = 0; j < 2; j++) {
+                limits = j > 0? this.adjustedLimits.high : this.adjustedLimits.low;
+                ctx.beginPath();
+                ctx.moveTo(this.valueToX(this.x[0]), this.panel.bottom - this.precisionToY(limits[0] * this.scale));
+                for(let i = 0; i < this.x.length; i++) {
+                    ctx.lineTo(this.valueToX(this.x[i]), this.panel.bottom - this.precisionToY(limits[i] * this.scale));
+                }
+                ctx.stroke();
+            }
+
+            limits = this.adjustedLimits.high;
+            ctx.beginPath();
+            ctx.moveTo(this.valueToX(this.x[0]), this.panel.bottom - this.precisionToY(limits[0] * this.scale));
+            for(let i = 0; i < this.x.length; i++) {
+                ctx.lineTo(this.valueToX(this.x[i]), this.panel.bottom - this.precisionToY(limits[i] * this.scale));
+            }
+            ctx.stroke();
+        }
 
         // X Axis
         this.drawAxisX();
@@ -800,6 +946,8 @@ class Distribution {
                 betX - this.style.axisTickSizeY*2,
                 betY - tickDistance*i + this.style.axisLabelFontSizeY/4);
         }
+
+        return this;
     }
 }
 

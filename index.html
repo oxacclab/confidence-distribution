@@ -98,22 +98,23 @@
 
         window.dist = new Distribution({
             canvas: document.getElementById('myCanvas'),
-            xMin: 0,
+            xMin: -100,
             xMax: 100,
             minPrecision: .25,
             maxPrecision: .90,
+            constantAUC: true,
             style: {
                 gutterX: 5,
                 gutterY: 15,
                 paddingX: 40,
                 paddingY: 40,
                 axisTickSizeX: 10,
-                precisionPadding: .05,
-                precisionStart: .15,
+                precisionStart: .05,
                 showWidgetLabel: true
             },
             callback: {
-                onUpdate: ()=>window.enableAnswerButton()
+                onUpdate: ()=>window.enableAnswerButton(),
+                //onDraw: ()=>dist.showGuides()
             }
         }).drawAxisX();
 
