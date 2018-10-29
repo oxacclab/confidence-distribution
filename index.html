@@ -132,7 +132,7 @@
                 return showFinalScore();
             window.dist = new Distribution(window.dist).clearCanvas().drawAxisX();
             document.getElementById("RoundCounter").innerText = questionNumber.toString();
-            document.getElementById("Prompt").innerHTML = questions[questionNumber];
+            document.getElementById("Prompt").innerHTML = window.questions[window.questionNumber];
         };
 
         function showFinalScore() {
@@ -141,9 +141,9 @@
         }
     </script>
     <script type="text/javascript">
-        let questionNumber = 0;
-        let questions = [];
-        let answers = [];
+        window.questionNumber = 0;
+        window.questions = [];
+        window.answers = [];
 
         // parse xml file
         function setQA(xmlFile) {
