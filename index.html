@@ -128,7 +128,7 @@
 
         window.nextRound = function() {
             buttons.nextRound.disabled = true;
-            if(questionNumber >= questions.length)
+            if(window.questionNumber >= questions.length)
                 return showFinalScore();
             window.dist = new Distribution(window.dist).clearCanvas().drawAxisX();
             document.getElementById("RoundCounter").innerText = questionNumber.toString();
@@ -158,8 +158,8 @@
             // set questions according to shuffled order
             for(let i = 0; i < question.length; i++) {
                 let x = shuffledOrder[i];
-                questions[i] = question[x].getElementsByTagName("prompt")[0].innerHTML;
-                answers[i] = parseInt(question[x].getElementsByTagName("target")[0].innerHTML);
+                window.questions[i] = question[x].getElementsByTagName("prompt")[0].innerHTML;
+                window.answers[i] = parseInt(question[x].getElementsByTagName("target")[0].innerHTML);
             }
             setTimeout(()=>nextRound(), 500);
         }
@@ -193,8 +193,8 @@
 
 
         function clickButton() {
-            let answer = answers[questionNumber];
-            questionNumber++;
+            let answer = window.answers[window.questionNumber];
+            window.questionNumber++;
             dist.showResult(answer);
             // disable canvas interactions
             dist.canvas.registerClickMouse(false);
@@ -204,7 +204,7 @@
             if(isNaN(score))
                 score = 0;
             document.getElementById('ScoreCounter').innerText = score.toFixed(2);
-            let mean = score/questionNumber;
+            let mean = score/window.questionNumber;
             if(isNaN(mean))
                 mean = 0;
             document.getElementById('Average').innerText = mean.toFixed(2);
