@@ -47,9 +47,11 @@ class Distribution {
      * @param [args.callback.onUpdate = null] {function} - called when Distribution updates from cursor click.
      * Called with the click event as a parameter.
      *
+     * @param [startEnabled = true] {boolean} - whether to begin with the canvas clickable
+     *
      * @return {Distribution}
      */
-    constructor(args) {
+    constructor(args, startEnabled = true) {
         let canvas = typeof args.canvas === "undefined"? null : args.canvas;
         this.xMin = typeof args.xMin === "undefined"? 0 : args.xMin;
         this.xMax = typeof args.xMax === "undefined"? 100 : args.xMax;
@@ -62,6 +64,8 @@ class Distribution {
         this.minPayout = typeof args.minPayout === "undefined"? -Infinity : args.minPayout;
         this.maxPayout = typeof args.maxPayout === "undefined"? Infinity : args.maxPayout;
         this.scaleFactor = typeof args.scaleFactor === "undefined"? 10 : args.scaleFactor;
+
+        this.startEnabled = startEnabled;
 
         this.callback = Distribution.defaultCallbacks;
         if(typeof args.callback !== "undefined")
@@ -202,7 +206,9 @@ class Distribution {
 
         this.canvas.addEventListener('mouseup', ()=>this.canvas.registerTrackMouse(false));
         this.canvas.addEventListener('mouseout', ()=>this.canvas.registerTrackMouse(false));
-        this.canvas.registerClickMouse(true);
+
+        if(this.startEnabled)
+            this.canvas.registerClickMouse(true);
 
         if(typeof this.callback.onRegisterCanvas === "function")
             this.callback.onRegisterCanvas();
