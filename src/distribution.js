@@ -34,6 +34,8 @@ class Distribution {
      * @param [args.maxPrecision = 1.0] {number} - maximum distribution precision (between 0 and 1)
      * @param [args.minBet = .0] {number} - minimum bet amount allowed. Assigned to minPrecision.
      * @param [args.maxBet = 1.0] {number} - maximum bet allowed. Assigned to maxPrecision.
+     * @param [args.minPayout = -Infinity] {number} - minimum payout on any round.
+     * @param [args.maxPayout = Infinity] {number} - maximum payout on any round.
      * @param [args.scaleFactor = 10] {number} - factor by which to scale the curve width
      *
      * @param [args.constantAUC = true] {boolean} - whether to increase inbounds values where parts of
@@ -57,6 +59,8 @@ class Distribution {
         this.maxPrecision = typeof args.maxPrecision === "undefined"? .9 : args.maxPrecision;
         this.minBet = typeof args.minBet === "undefined"? .10 : args.minBet;
         this.maxBet = typeof args.maxBet === "undefined"? .90 : args.maxBet;
+        this.minPayout = typeof args.minPayout === "undefined"? -Infinity : args.minPayout;
+        this.maxPayout = typeof args.maxPayout === "undefined"? Infinity : args.maxPayout;
         this.scaleFactor = typeof args.scaleFactor === "undefined"? 10 : args.scaleFactor;
 
         this.callback = Distribution.defaultCallbacks;
@@ -483,11 +487,11 @@ class Distribution {
             high: ctx.lineWidth <= 1? 'lightblue' : 'white'
         };
 
-        for(let i = 1; i < this.y.length; i++) {
+        for(let i = 0; i < this.y.length; i++) {
             ctx.beginPath();
-            ctx.rect(this.valueToX(this.x[i]) - this.pixelsPerPoint.x/2, // nudge a little to centre the rectangle
+            ctx.rect(this.valueToX(this.x[i]) - this.pixelsPerPoint.x/4,
                 this.panel.bottom - this.y[i],
-                this.pixelsPerPoint.x,
+                this.pixelsPerPoint.x - this.pixelsPerPoint.x/2, // account for the frame in the width
                 this.y[i]);
             ctx.strokeStyle = strokeStyle.high;
             ctx.fillStyle = 'lightblue';
@@ -500,13 +504,13 @@ class Distribution {
     drawRectangle(xIndex, fill = 'blue', line = 'lightgreen') {
         let ctx = this.canvas.getContext('2d');
         ctx.beginPath();
-        ctx.lineStyle = line;
+        ctx.strokeStyle = line;
         ctx.fillStyle = fill;
         ctx.lineWidth = this.pixelsPerPoint.x / 4;
         ctx.rect(
-            this.valueToX(this.x[xIndex]) - this.pixelsPerPoint.x/2,
+            this.valueToX(this.x[xIndex]) - this.pixelsPerPoint.x/4,
             this.panel.bottom - this.y[xIndex],
-            this.pixelsPerPoint.x,
+            this.pixelsPerPoint.x - this.pixelsPerPoint.x/2,
             this.y[xIndex]);
         ctx.fill();
         ctx.stroke();
@@ -517,7 +521,7 @@ class Distribution {
         let ctx = this.canvas.getContext('2d');
         ctx.beginPath();
         ctx.lineWidth = this.pixelsPerPoint.x / 4;
-        ctx.lineStyle = 'lightgreen';
+        ctx.strokeStyle = 'lightgreen';
         ctx.fillStyle = 'lightgreen';
         ctx.rect(
             this.valueToX(this.x[xIndex]) - this.pixelsPerPoint.x/2,
@@ -597,7 +601,7 @@ class Distribution {
             // .drawAxisY();
 
         this.drawWidget({
-            x: this.valueToX(this.x[this.bet.index]) + this.pixelsPerPoint.x/2,
+            x: this.valueToX(this.x[this.bet.index]),
             y: this.y[this.bet.index]
         });
 
@@ -621,7 +625,7 @@ class Distribution {
             .drawRectangle(this.x.indexOf(result))
             .drawAxisX()
             .drawWidget({
-                x: this.valueToX(this.x[this.bet.index]) + this.pixelsPerPoint.x/2,
+                x: this.valueToX(this.x[this.bet.index]),
                 y: this.y[this.bet.index]
             });
 
@@ -665,7 +669,7 @@ class Distribution {
      * @return {number} x coordinate for plotting
      */
     valueToX(value) {
-        return this.panel.left + this.panel.width / this.x.length * (value - this.xMin);
+        return this.panel.left + this.panel.width / this.x.length * (value - this.xMin) + this.pixelsPerPoint.x/2;
     }
 
     /**
@@ -712,11 +716,15 @@ class Distribution {
     /**
      * Return a y coordinate as a payout value
      * @param y {number} y-coordinate
+     * @param capByPayoutLimits {boolean} whether to allow values above maxPayout or below minPayout
      * @return {number} payout value
      */
-    yToPayout(y) {
-        return this.minBet +
+    yToPayout(y, capByPayoutLimits = true) {
+        let out = this.minBet +
             (y - (this.minPrecision - this.style.precisionStart) * this.precisionScale) / this.payoutScale;
+        if(!capByPayoutLimits)
+            return out;
+        return out < this.minPayout? this.minPayout : out > this.maxPayout? this.maxPayout : out;
     }
 
     /**
@@ -727,7 +735,7 @@ class Distribution {
     drawAxisX(y) {
         let ctx = this.canvas.getContext('2d');
         // line
-        y = typeof y === "undefined"? this.panel.top + this.panel.height + this.style.axisPositionX : y;
+        y = typeof y === "undefined"? this.panel.bottom + this.style.axisPositionX : y;
         ctx.strokeStyle = this.style.axisStrokeStyleX;
         ctx.lineWidth = this.style.axisLineWidthX;
         ctx.beginPath();
@@ -736,16 +744,15 @@ class Distribution {
         ctx.strokeStyle = this.style.axisStrokeStyleX;
         ctx.stroke();
         // ticks
-        let tickDistance = this.panel.width / this.style.axisTicksX;
         ctx.font = this.style.axisLabelFontSizeX.toString() + 'px' + ' ' + this.style.axisLabelFontX;
         ctx.textAlign = 'center';
-        let label = "";
         for(let i = 0; i <= this.style.axisTicksX; i++) {
-            ctx.moveTo(this.panel.left + i*tickDistance, y);
-            ctx.lineTo(this.panel.left + i*tickDistance, y+this.style.axisTickSizeX);
+            let x = Math.round(this.xMin + (this.xMax - this.xMin) / this.style.axisTicksX * i);
+            let xPosition = this.valueToX(x);
+            ctx.moveTo(xPosition, y);
+            ctx.lineTo(xPosition, y + this.style.axisTickSizeX);
             ctx.stroke();
-            label = this.x[i*Math.round(this.x.length / this.style.axisTicksX)];
-            ctx.strokeText(label, this.panel.left + i*tickDistance, y + this.style.axisTickSizeX*2);
+            ctx.strokeText(x.toString(), xPosition, y + this.style.axisTickSizeX*2.5);
         }
         return this;
     }
