@@ -1,9 +1,8 @@
 "use strict";
 
+// TODO: allow horizontally truncated distributions (i.e. cap minimum values at 0 to begin with)
 // TODO: yInt adjustment?
-// TODO: highlight hovered option
 // TODO: widget label style options
-
 
 class Distribution {
     /**
@@ -41,6 +40,8 @@ class Distribution {
      * @param [args.constantAUC = true] {boolean} - whether to increase inbounds values where parts of
      * the distribution are outside of the limits of the x axis.
      *
+     * @param [args.hoverDisplay = false] {boolean} - whether to show the payout display on hover
+     *
      * @param [args.style = {}] {{}} - styling options. Default to Distribution.defaultStyle.
      *
      * @param [args.callback = {}] {{}} - callbacks
@@ -64,6 +65,8 @@ class Distribution {
         this.minPayout = typeof args.minPayout === "undefined"? -Infinity : args.minPayout;
         this.maxPayout = typeof args.maxPayout === "undefined"? Infinity : args.maxPayout;
         this.scaleFactor = typeof args.scaleFactor === "undefined"? 10 : args.scaleFactor;
+
+        this.hoverDisplay = typeof args.hoverDisplay === "undefined"? false : args.hoverDisplay;
 
         this.startEnabled = startEnabled;
 
@@ -160,15 +163,33 @@ class Distribution {
 
             precisionPadding: 'auto',
             precisionMargin: .0, // margin is added to padding and allows extra padding on an auto value for padding
-            precisionStart: .0
+            precisionStart: .0,
+
+            backgroundColor: 'white',
+
+            rectangleFill: 'lightblue',
+            rectangleFillLow: 'red',
+            rectangleHighlight: 'lightgreen',
+
+            animationFill: 'blue',
+            animationStroke: 'lightgreen',
+            animationTextShow: true
         };
     }
 
     /**
      * Default callbacks.
+     * * onAnimationEnd(xIndex, yCoordinate, pixelsPerFrame, frameNumber)
+     * * onAnimationFrame(xIndex, yCoordinate, pixelsPerFrame, frameNumber)
+     * * onUpdate()
+     * * onRegisterCanvas(canvas)
+     * * onFinishLoading()
+     * * onDraw()
      */
     static get defaultCallbacks() {
         return {
+            onAnimationEnd: null,
+            onAnimationFrame: null,
             onUpdate: null,
             onRegisterCanvas: null,
             onFinishLoading: null,
@@ -187,6 +208,9 @@ class Distribution {
         this.canvas.drawToCanvas = function(event) {
             this.distribution.drawToCanvas(event);
         };
+        this.canvas.updateHoverDisplay = function(event) {
+            this.distribution.updateHoverDisplay(event);
+        };
         this.canvas.clickMouse = function(clickEvent) {
             this.registerTrackMouse();
             this.drawToCanvas(clickEvent)
@@ -203,15 +227,23 @@ class Distribution {
             else
                 this.removeEventListener('mousedown', this.clickMouse);
         };
+        this.canvas.registerHoverTrackMouse = function(enable = true) {
+            if(enable)
+                this.addEventListener('mousemove', this.updateHoverDisplay);
+            else
+                this.removeEventListener('mousemove', this.updateHoverDisplay);
+        };
 
         this.canvas.addEventListener('mouseup', ()=>this.canvas.registerTrackMouse(false));
         this.canvas.addEventListener('mouseout', ()=>this.canvas.registerTrackMouse(false));
 
-        if(this.startEnabled)
+        if(this.startEnabled) {
             this.canvas.registerClickMouse(true);
+            this.canvas.registerHoverTrackMouse(this.hoverDisplay);
+        }
 
         if(typeof this.callback.onRegisterCanvas === "function")
-            this.callback.onRegisterCanvas();
+            this.callback.onRegisterCanvas(this.canvas);
 
         return this;
     }
@@ -364,9 +396,10 @@ class Distribution {
     /**
      * Return cursor position in panel coordinates
      * @param clickEvent {MouseEvent}
+     * @param save {boolean} whether to update saved coordaintes
      * @return {{x: number, y: number}}
      */
-    getCursorCoordinates(clickEvent) {
+    getCursorCoordinates(clickEvent, save = true) {
         let x = clickEvent.clientX -
             this.canvas.getBoundingClientRect().left - this.canvas.clientLeft - this.panel.left;
         let y = clickEvent.clientY -
@@ -376,7 +409,8 @@ class Distribution {
         y = y < 0? 0 : y > this.panel.height? this.panel.height : y;
 
         // save raw cursor position
-        this.cursorPosition = {x, y};
+        if(save)
+            this.cursorPosition = {x, y};
 
         // reverse y coordinate to handle graphics using reversed y axis
         y = this.panel.height - y;
@@ -425,7 +459,7 @@ class Distribution {
         let cursor = this.getCursorCoordinates(clickEvent);
 
         // desired mean is the x equivalent value of the mouse x coordinate clamped by the max
-        this.bet.index = Math.min(Math.floor(cursor.x / this.panel.width * this.x.length), this.x.length-1);
+        this.bet.index = this.xToValue(cursor.x);
         this.bet.on = this.x[this.bet.index];
 
         // y as proportion of space available
@@ -482,6 +516,7 @@ class Distribution {
     clearCanvas() {
         let ctx = this.canvas.getContext('2d');
         ctx.clearRect(0,0,this.canvas.clientWidth, this.canvas.clientHeight);
+        this.canvas.style.backgroundColor = this.style.backgroundColor;
         return this;
     }
 
@@ -489,8 +524,8 @@ class Distribution {
         let ctx = this.canvas.getContext('2d');
         ctx.lineWidth = this.pixelsPerPoint.x / 4;
         let strokeStyle = {
-            low: ctx.lineWidth <= 1? 'red' : 'white',
-            high: ctx.lineWidth <= 1? 'lightblue' : 'white'
+            low: ctx.lineWidth <= 1? this.style.rectangleFillLow : this.style.backgroundColor,
+            high: ctx.lineWidth <= 1? this.style.rectangleFill : this.style.backgroundColor
         };
 
         for(let i = 0; i < this.y.length; i++) {
@@ -500,27 +535,74 @@ class Distribution {
                 this.pixelsPerPoint.x - this.pixelsPerPoint.x/2, // account for the frame in the width
                 this.y[i]);
             ctx.strokeStyle = strokeStyle.high;
-            ctx.fillStyle = 'lightblue';
+            ctx.fillStyle = this.style.rectangleFill;
             ctx.fill();
             ctx.stroke();
         }
         return this;
     }
 
-    drawRectangle(xIndex, fill = 'blue', line = 'lightgreen') {
+    /**
+     * Draw a single rectangle. Used for animations.
+     * @param xIndex {int} index of this.x to use for positioning rectangle
+     * @param y {number} y-coordinate of the rectangle's extremity from the origin
+     * @param [fill=style.animationStroke] {string|null} colour of the rectangle fill
+     * @param [line=style.animationFill] {string|null} colour of the rectangle outline
+     * @return {Distribution}
+     */
+    drawRectangle(xIndex, y, fill = null, line = null) {
         let ctx = this.canvas.getContext('2d');
         ctx.beginPath();
-        ctx.strokeStyle = line;
-        ctx.fillStyle = fill;
+        ctx.strokeStyle = line !== null? line : this.style.animationStroke;
+        ctx.fillStyle = fill !== null? fill : this.style.animationFill;
         ctx.lineWidth = this.pixelsPerPoint.x / 4;
         ctx.rect(
             this.valueToX(this.x[xIndex]) - this.pixelsPerPoint.x/4,
-            this.panel.bottom - this.y[xIndex],
+            this.panel.bottom - y,
             this.pixelsPerPoint.x - this.pixelsPerPoint.x/2,
-            this.y[xIndex]);
+            y);
         ctx.fill();
         ctx.stroke();
         return this;
+    }
+
+    /**
+     * Show the rectangle at xIndex collapsing towards 0 on the y axis. Recursive calling through setTimeout
+     * @param xIndex {int} index of this.x of rectangle
+     * @param [pixelsPerFrame=5] {number} pixels to remove each frame
+     * @param [frameNumber=0] {int} which frame is currently playing
+     */
+    animatePayout(xIndex, pixelsPerFrame = 5, frameNumber = 0) {
+        let y = this.y[xIndex];
+        let lt0 = y < 0;
+        if(lt0)
+            y += pixelsPerFrame * frameNumber;
+        else
+            y -= pixelsPerFrame * frameNumber;
+        let end = y < 0 !== lt0; // we swapped sides, we're done
+        if(end)
+            y = 0;
+
+        this.clearCanvas()
+            .drawRectangles()
+            .highlightColumn(xIndex)
+            .drawRectangle(xIndex, y)
+            .drawAxisX()
+            .drawWidget({
+                x: this.valueToX(this.x[this.bet.index]),
+                y: this.y[this.bet.index]
+            });
+
+        if(typeof this.callback.onDraw === "function")
+            this.callback.onDraw();
+        if(typeof this.callback.onAnimationFrame === "function")
+            this.callback.onAnimationFrame(xIndex, y, pixelsPerFrame, frameNumber);
+
+        if(!end)
+            this.animationTimeout = setTimeout(()=>this.animatePayout(xIndex, pixelsPerFrame, frameNumber+1), 20);
+        else
+            if(typeof this.callback.onAnimationEnd === "function")
+                this.callback.onAnimationEnd(xIndex, y, pixelsPerFrame, frameNumber);
     }
 
     highlightColumn(xIndex) {
@@ -591,8 +673,6 @@ class Distribution {
     }
 
     drawToCanvas(clickEvent) {
-        // console.log('-----------------')
-
         if(clickEvent === null)
             return console.log('No click event sent to drawToCanvas');
         if(this.canvas === null) // TODO: better check for canvas usability. Move to constructor?
@@ -604,7 +684,6 @@ class Distribution {
         this.clearCanvas()
             .drawRectangles()
             .drawAxisX();
-            // .drawAxisY();
 
         this.drawWidget({
             x: this.valueToX(this.x[this.bet.index]),
@@ -624,19 +703,9 @@ class Distribution {
      */
     showResult(result) {
         // Save amount won
-        this.bet.won = this.yToPayout(this.y[this.bet.index]);
-        this.clearCanvas()
-            .drawRectangles()
-            .highlightColumn(this.x.indexOf(result))
-            .drawRectangle(this.x.indexOf(result))
-            .drawAxisX()
-            .drawWidget({
-                x: this.valueToX(this.x[this.bet.index]),
-                y: this.y[this.bet.index]
-            });
-
-        if(typeof this.callback.onDraw === "function")
-            this.callback.onDraw();
+        let x = this.x.indexOf(result);
+        this.bet.won = this.yToPayout(this.y[x]);
+        this.animatePayout(x);
 
         return this;
     }
@@ -671,11 +740,36 @@ class Distribution {
 
     /**
      * Return the x coordinate of a given value from the x-scale
-     * @param value {number} value on the x-axis to plot
+     * @param value {number|number[]} value on the x-axis to plot
      * @return {number} x coordinate for plotting
      */
     valueToX(value) {
+        if(typeof value === "undefined")
+            return NaN;
+        if(typeof value.length !== "undefined") {
+            let sum = 0;
+            for(let i = 0; i < value.length; i++)
+                sum += this.valueToX(value[i]);
+            return sum;
+        }
         return this.panel.left + this.panel.width / this.x.length * (value - this.xMin) + this.pixelsPerPoint.x/2;
+    }
+
+    /**
+     * Return the value on the x scale of coordinate 'x'
+     * @param x {number|number[]} coordinate
+     * @return {number} value
+     */
+    xToValue(x) {
+        if(typeof x === "undefined")
+            return NaN;
+        if(typeof x.length !== "undefined") {
+            let sum = 0;
+            for(let i = 0; i < x.length; i++)
+                sum += this.xToValue(x[i]);
+            return sum;
+        }
+        return Math.min(Math.floor(x / this.panel.width * this.x.length), this.x.length-1);
     }
 
     /**
@@ -690,10 +784,26 @@ class Distribution {
     }
 
     precisionToY(precision) {
+        if(typeof precision === "undefined")
+            return NaN;
+        if(typeof precision.length !== "undefined") {
+            let sum = 0;
+            for(let i = 0; i < precision.length; i++)
+                sum += this.precisionToY(precision[i]);
+            return sum;
+        }
         return (precision - this.style.precisionStart) * this.precisionScale;
     }
 
     yToPrecision(y) {
+        if(typeof y === "undefined")
+            return NaN;
+        if(typeof y.length !== "undefined") {
+            let sum = 0;
+            for(let i = 0; i < y.length; i++)
+                sum += this.yToPrecision(y[i]);
+            return sum;
+        }
         return y / this.precisionScale + this.style.precisionStart;
     }
 
@@ -702,7 +812,6 @@ class Distribution {
      * @return {number}
      */
     get payoutScale() {
-        // find minPrecision as y-coordinate
         let betRange = this.maxBet - this.minBet;
         let precisionRange = this.maxPrecision - this.minPrecision;
         let betAsPrecision = precisionRange / betRange;
@@ -711,21 +820,37 @@ class Distribution {
 
     /**
      * Return a payout or bet value as a y coordinate
-     * @param payout {number} payout to plot
+     * @param payout {number|number[]} payout to plot
      * @return {number} y-coordinate for plotting
      */
     payoutToY(payout) {
+        if(typeof payout === "undefined")
+            return NaN;
+        if(typeof payout.length !== "undefined") {
+            let sum = 0;
+            for(let i = 0; i < payout.length; i++)
+                sum += this.payoutToY(payout[i]);
+            return sum;
+        }
         return (this.minPrecision - this.style.precisionStart) * this.precisionScale +
             (payout - this.minBet) * this.payoutScale;
     }
 
     /**
      * Return a y coordinate as a payout value
-     * @param y {number} y-coordinate
+     * @param y {number|number[]} y-coordinate
      * @param capByPayoutLimits {boolean} whether to allow values above maxPayout or below minPayout
      * @return {number} payout value
      */
     yToPayout(y, capByPayoutLimits = true) {
+        if(typeof y === "undefined")
+            return NaN;
+        if(typeof y.length !== "undefined") {
+            let sum = 0;
+            for(let i = 0; i < y.length; i++)
+                sum += this.yToPayout(y[i], capByPayoutLimits);
+            return sum;
+        }
         let out = this.minBet +
             (y - (this.minPrecision - this.style.precisionStart) * this.precisionScale) / this.payoutScale;
         if(!capByPayoutLimits)
@@ -793,6 +918,37 @@ class Distribution {
                 this.panel.height + this.panel.top - tickDistance*i + this.style.axisLabelFontSizeY/4);
         }
         return this;
+    }
+
+    createHoverDisplay() {
+        let id = 'DistributionHoverDisplay';
+        let hd = document.getElementById(id);
+        if(hd !== null) {
+            this.hoverDisplayElement = hd;
+            return this;
+        }
+        hd = document.createElement('div');
+        hd.id = id;
+        hd.style.position = 'fixed';
+        this.canvas.parentElement.appendChild(hd);
+        this.hoverDisplayElement = hd;
+        return this;
+    }
+
+    updateHoverDisplay(mouseEvent) {
+        if(!this.hoverDisplay)
+            return;
+        if(typeof this.hoverDisplayElement === "undefined")
+            this.createHoverDisplay();
+        if(typeof this.y === "undefined")
+            return;
+
+        let cursor = this.getCursorCoordinates(mouseEvent, false);
+        let value = this.xMin + this.xToValue(cursor.x);
+        let payout = this.yToPayout(this.y[this.x.indexOf(value)]);
+        let html = 'Payout for ' + value.toString() + ' = ' + payout.toFixed(2);
+        html += '; AUC = ' + utils.sum(this.y).toFixed(2) + 'y; $' + this.yToPayout(this.y).toFixed(2);
+        this.hoverDisplayElement.innerHTML = html;
     }
 
     /**

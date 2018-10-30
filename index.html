@@ -84,9 +84,9 @@
                     <p class="label">Round #:</p>
                     <p class="counter"><span id="RoundCounter">1</span></p>
                     <p class="label">Total score:</p>
-                    <p class="counter"><span id="ScoreCounter">0</span></p>
-                    <p class="label">Score/round:</p>
-                    <p class="counter"><span id="Average">0</span></p>
+                    <p class="counter">$<span id="ScoreCounter">0.00</span></p>
+                    <!--<p class="label">Score/round:</p>-->
+                    <!--<p class="counter"><span id="Average">0</span></p>-->
                 </div>
                 <button onclick="clickButton()" id="ShowResultButton" disabled="disabled">(S)how result</button>
                 <button onclick="nextRound()" id="NextRoundButton" disabled="disabled">(N)ext round</button>
@@ -95,6 +95,7 @@
     </div>
 
     <script type="module">
+        "use strict";
         import {Distribution} from "./src/distribution.js";
 
         window.buttons = {
@@ -110,19 +111,22 @@
             xMax: 1950,
             minPrecision: .25,
             maxPrecision: .90,
+            minBet: .25,
+            maxBet: 1.00,
             constantAUC: true,
+            hoverDisplay: false,
             style: {
                 gutterX: 5,
                 gutterY: 15,
                 paddingX: 40,
                 paddingY: 40,
                 axisTickSizeX: 10,
-                precisionStart: .05,
+                axisPositionX: 0,
+                precisionStart: .0,
                 showWidgetLabel: true
             },
             callback: {
-                onUpdate: ()=>window.enableAnswerButton(),
-                //onDraw: ()=>dist.showGuides()
+                onUpdate: ()=>window.enableAnswerButton()
             }
         }, false).drawAxisX();
 
@@ -131,7 +135,7 @@
             if(window.questionNumber >= questions.length)
                 return showFinalScore();
             window.dist = new Distribution(window.dist).clearCanvas().drawAxisX();
-            document.getElementById("RoundCounter").innerText = questionNumber.toString();
+            document.getElementById("RoundCounter").innerText = (questionNumber+1).toString();
             document.getElementById("Prompt").innerHTML = window.questions[window.questionNumber];
         };
 
@@ -141,7 +145,9 @@
         }
     </script>
     <script type="text/javascript">
+        "use strict";
         window.questionNumber = 0;
+        window.score = 0.0;
         window.questions = [];
         window.answers = [];
 
@@ -161,6 +167,10 @@
                 window.questions[i] = question[x].getElementsByTagName("prompt")[0].innerHTML;
                 window.answers[i] = parseInt(question[x].getElementsByTagName("target")[0].innerHTML);
             }
+            setTimeout(function(){
+                dist.callback.onAnimationFrame = animateScore;
+                dist.callback.onAnimationEnd = animateScoreEnd;
+            }, 400);
             setTimeout(()=>nextRound(), 500);
         }
 
@@ -194,23 +204,44 @@
 
         function clickButton() {
             let answer = window.answers[window.questionNumber];
-            window.questionNumber++;
             dist.showResult(answer);
             // disable canvas interactions
             dist.canvas.registerClickMouse(false);
+            buttons.showResults.disabled = true;
+        }
+
+        function animateScore(x, y) {
             // update score
-            let score = parseFloat(document.getElementById('ScoreCounter').innerText);
-            score += parseFloat(dist.yToPayout(dist.y[dist.x.indexOf(answer)]).toFixed(2));
+            let score = window.score;
+            let fullRect = dist.yToPayout(dist.y[x]);
+            let currentRect = dist.yToPayout(y);
+            score = score + fullRect - currentRect;
             if(isNaN(score))
                 score = 0;
             document.getElementById('ScoreCounter').innerText = score.toFixed(2);
-            let mean = score/window.questionNumber;
-            if(isNaN(mean))
-                mean = 0;
-            document.getElementById('Average').innerText = mean.toFixed(2);
-            // enable next round button
-            buttons.nextRound.disabled = false;
-            buttons.showResults.disabled = true;
+            // let mean = score/window.questionNumber;
+            // if(isNaN(mean) || mean === Infinity)
+            //     mean = 0;
+            // document.getElementById('Average').innerText = mean.toFixed(2);
+        }
+
+        function animateScoreEnd(x, y, speed, frames) {
+            // end of round update
+            window.questionNumber++;
+            window.score += dist.bet.won;
+            console.log(dist.bet.won)
+            console.log(dist.yToPayout[dist.y[x]])
+            document.getElementById('ScoreCounter').innerText = window.score.toFixed(2);
+            // let mean = window.score/window.questionNumber;
+            // if(isNaN(mean))
+            //     mean = 0;
+            // document.getElementById('Average').innerText = mean.toFixed(2);
+            let timeElapsed = frames * 20; // 20ms per frame is 50fps
+            let delay = 1500 - timeElapsed;
+            if(delay <= 0)
+                nextRound();
+            else
+                setTimeout(nextRound, delay);
         }
 
         window.enableAnswerButton = function() {
