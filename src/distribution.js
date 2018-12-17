@@ -124,7 +124,7 @@ class Distribution {
         // timing of key events
         this.time = {
             bet: -1,
-            start: new Date().getTime(),
+            start: new Date().getTime()
         };
 
         if(typeof this.callback.onFinishLoading === "function")

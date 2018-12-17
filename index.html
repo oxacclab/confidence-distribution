@@ -132,7 +132,7 @@
 
         window.nextRound = function() {
             buttons.nextRound.disabled = true;
-            if(window.questionNumber >= questions.length)
+            if(window.questionNumber >= questions.length || window.questionNumber >= window.MAX_QUESTIONS)
                 return showFinalScore();
             window.dist = new Distribution(window.dist).clearCanvas().drawAxisX();
             document.getElementById("RoundCounter").innerText = (questionNumber+1).toString();
@@ -146,6 +146,7 @@
     </script>
     <script type="text/javascript">
         "use strict";
+        window.MAX_QUESTIONS = 10;
         window.questionNumber = 0;
         window.score = 0.0;
         window.questions = [];
@@ -158,7 +159,7 @@
             let question = xmlDoc.getElementsByTagName("question");
             // shuffle questions
             let shuffledOrder = [];
-            for(let i = 0; i < 10; i++)
+            for(let i = 0; i < question.length; i++)
                 shuffledOrder[i] = i;
             shuffledOrder = shuffle(shuffledOrder);
             // set questions according to shuffled order
